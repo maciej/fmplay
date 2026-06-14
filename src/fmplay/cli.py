@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Annotated
@@ -17,6 +18,11 @@ from fmplay.profiles import (
     list_profile_summaries,
     list_profiles,
 )
+from fmplay.spectrogram import (
+    SpectrogramError,
+    print_kitty_image,
+    render_spectrogram_image,
+)
 
 _COMMANDS = frozenset({"play", "profiles"})
 
@@ -27,7 +33,13 @@ def _error(message: str) -> None:
 
 
 def _play_audio(
-    audio_file: Path, profile_name: str, backend: PlaybackBackend | None = None
+    audio_file: Path,
+    profile_name: str,
+    backend: PlaybackBackend | None = None,
+    *,
+    no_play: bool = False,
+    spectrogram: bool = False,
+    spectrogram_file: Path | None = None,
 ) -> int:
     audio_file = audio_file.expanduser()
     if not audio_file.exists():
@@ -45,14 +57,36 @@ def _play_audio(
         raise SystemExit(2) from None
 
     try:
-        profile.play(audio_file, backend or default_backend())
+        with tempfile.TemporaryDirectory(prefix="fmplay-") as temp_dir:
+            prepared_audio = _prepare_profile_audio(profile, audio_file, Path(temp_dir))
+            if spectrogram or spectrogram_file is not None:
+                spectrogram_path = (
+                    spectrogram_file or Path(temp_dir) / "spectrogram.png"
+                )
+                spectrogram_path = spectrogram_path.expanduser()
+                render_spectrogram_image(prepared_audio, spectrogram_path)
+                if spectrogram_file is None:
+                    print_kitty_image(spectrogram_path)
+            if not no_play:
+                (backend or default_backend()).play(prepared_audio)
     except KeyboardInterrupt:
         return 130
-    except (PlaybackError, ProfileError) as exc:
+    except (PlaybackError, ProfileError, SpectrogramError) as exc:
         _error(str(exc))
         raise SystemExit(1) from exc
 
     return 0
+
+
+def _prepare_profile_audio(profile: object, audio_file: Path, temp_dir: Path) -> Path:
+    render = getattr(profile, "render", None)
+    if callable(render):
+        profile_name = getattr(profile, "name", "profile")
+        transformed_path = temp_dir / f"{profile_name}.wav"
+        render(audio_file, transformed_path)
+        return transformed_path
+
+    return audio_file
 
 
 def _print_profiles() -> None:
@@ -84,8 +118,39 @@ def build_app(backend: PlaybackBackend | None = None) -> typer.Typer:
                 show_default=True,
             ),
         ] = "passthrough",
+        no_play: Annotated[
+            bool,
+            typer.Option(
+                "--no-play",
+                help="Apply the profile without playing audio.",
+            ),
+        ] = False,
+        spectrogram: Annotated[
+            bool,
+            typer.Option(
+                "--spectrogram",
+                help=(
+                    "Draw a terminal spectrogram using the Kitty graphics "
+                    "protocol. Use --spectrogram=FILE.png to write a PNG file."
+                ),
+            ),
+        ] = False,
+        spectrogram_file: Annotated[
+            Path | None,
+            typer.Option(
+                "--spectrogram-file",
+                hidden=True,
+            ),
+        ] = None,
     ) -> int:
-        return _play_audio(audio_file, profile, backend)
+        return _play_audio(
+            audio_file,
+            profile,
+            backend,
+            no_play=no_play,
+            spectrogram=spectrogram,
+            spectrogram_file=spectrogram_file,
+        )
 
     @app.command()
     def profiles() -> int:
@@ -101,7 +166,7 @@ def _normalize_argv(argv: Sequence[str] | None) -> list[str] | None:
     if argv is None:
         return None
 
-    args = list(argv)
+    args = _normalize_spectrogram_args(argv)
     if not args or args[0] in _COMMANDS or args[0] in {"--help", "-h"}:
         return args
 
@@ -112,9 +177,10 @@ def run(
     argv: Sequence[str] | None = None, backend: PlaybackBackend | None = None
 ) -> int:
     app = build_app(backend)
+    args = list(argv) if argv is not None else sys.argv[1:]
     try:
         result = app(
-            args=_normalize_argv(argv),
+            args=_normalize_argv(args),
             prog_name="fmplay",
             standalone_mode=False,
         )
@@ -123,6 +189,17 @@ def run(
         raise SystemExit(exc.exit_code) from exc
 
     return int(result or 0)
+
+
+def _normalize_spectrogram_args(args: Sequence[str]) -> list[str]:
+    normalized: list[str] = []
+    for arg in args:
+        if arg.startswith("--spectrogram="):
+            value = arg.partition("=")[2]
+            normalized.extend(["--spectrogram-file", value])
+        else:
+            normalized.append(arg)
+    return normalized
 
 
 def main(argv: Sequence[str] | None = None) -> None:

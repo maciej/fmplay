@@ -75,6 +75,25 @@ Example:
 uv run fmplay --profile gsm audio.wav
 ```
 
+Draw a terminal spectrogram in a Kitty graphics protocol terminal such as
+Ghostty:
+
+```sh
+uv run fmplay --profile gsm --spectrogram audio.wav
+```
+
+Render the profiled spectrogram without playing audio:
+
+```sh
+uv run fmplay --profile marine-vhf-1993 --spectrogram --no-play audio.wav
+```
+
+Write the spectrogram to a PNG file instead of drawing it in the terminal:
+
+```sh
+uv run fmplay --profile marine-vhf-1993 --spectrogram=spectrogram.png --no-play audio.wav
+```
+
 Preview the Jan Heweliusz distress source through the historical VHF profile:
 
 ```sh
