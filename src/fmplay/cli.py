@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from fmplay.backends import PlaybackBackend, PlaybackError, default_backend
-from fmplay.profiles import get_profile, list_profiles
+from fmplay.profiles import ProfileError, get_profile, list_profiles
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -47,7 +47,7 @@ def run(
 
     try:
         profile.play(audio_file, backend or default_backend())
-    except PlaybackError as exc:
+    except (PlaybackError, ProfileError) as exc:
         parser.exit(1, f"fmplay: {exc}\n")
 
     return 0

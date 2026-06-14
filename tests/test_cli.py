@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -57,4 +58,29 @@ def test_unknown_profile_exits_with_available_profiles(
     assert exc_info.value.code == 2
     err = capsys.readouterr().err
     assert "unknown profile 'fm-radio'" in err
+    assert "gsm" in err
     assert "passthrough" in err
+
+
+def test_profile_error_exits_with_message(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audio_file = tmp_path / "audio.wav"
+    audio_file.write_bytes(b"not a real wav; ffmpeg is mocked")
+
+    def fake_run(
+        command: list[str],
+        *,
+        check: bool,
+        capture_output: bool,
+        text: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        raise FileNotFoundError(command[0])
+
+    monkeypatch.setattr("fmplay.profiles.subprocess.run", fake_run)
+
+    with pytest.raises(SystemExit) as exc_info:
+        run(["--profile", "gsm", str(audio_file)], backend=FakeBackend())
+
+    assert exc_info.value.code == 1
+    assert "ffmpeg was not found" in capsys.readouterr().err

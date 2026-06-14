@@ -52,9 +52,23 @@ Run the CLI from the workspace:
 uv run fmplay --profile passthrough audio.wav
 ```
 
-The initial `passthrough` profile plays the source file without applying any
-degradation. On macOS it uses the system `afplay` command. On other platforms it
-will use `ffplay` when available.
+Available profiles:
+
+- `passthrough`: Plays the source file without applying any degradation.
+- `gsm`: Plays a narrowband, mono GSM-phone-style degradation. It uses `ffmpeg`
+  to render an 8 kHz speech-band file before playback. If your `ffmpeg` build
+  supports the `libgsm` encoder, the profile round-trips through the actual GSM
+  Full Rate codec; otherwise it falls back to narrowband filtering, compression,
+  and bit-depth crushing.
+
+On macOS playback uses the system `afplay` command. On other platforms it will
+use `ffplay` when available.
+
+Example:
+
+```sh
+uv run fmplay --profile gsm audio.wav
+```
 
 Run checks:
 
