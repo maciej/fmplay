@@ -6,7 +6,9 @@ from fmplay.profiles import (
     PassthroughProfile,
     Profile,
     ProfileError,
+    ProfileSummary,
     get_profile,
+    list_profile_summaries,
     list_profiles,
 )
 
@@ -16,6 +18,8 @@ __all__ = [
     "PassthroughProfile",
     "Profile",
     "ProfileError",
+    "ProfileSummary",
     "get_profile",
+    "list_profile_summaries",
     "list_profiles",
 ]

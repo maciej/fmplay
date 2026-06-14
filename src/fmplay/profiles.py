@@ -17,9 +17,18 @@ class Profile(Protocol):
     """A playback or degradation profile."""
 
     name: str
+    description: str
 
     def play(self, path: Path, backend: PlaybackBackend) -> None:
         """Play path through this profile."""
+
+
+@dataclass(frozen=True)
+class ProfileSummary:
+    """Display metadata for an available profile."""
+
+    name: str
+    description: str
 
 
 @dataclass(frozen=True)
@@ -27,6 +36,7 @@ class PassthroughProfile:
     """Play the original audio file without transformation."""
 
     name: str = "passthrough"
+    description: str = "Play the source file without applying degradation."
 
     def play(self, path: Path, backend: PlaybackBackend) -> None:
         backend.play(path)
@@ -37,6 +47,7 @@ class GsmCodecProfile:
     """Play audio as if it passed through an old narrowband GSM phone path."""
 
     name: str = "gsm"
+    description: str = "Narrowband mono GSM-phone-style degradation."
     ffmpeg_command: str = "ffmpeg"
 
     def play(self, path: Path, backend: PlaybackBackend) -> None:
@@ -161,6 +172,7 @@ class MarineVhf1993Profile:
     """Play audio as a nearby ship may have heard 1993 VHF Channel 16."""
 
     name: str = "marine-vhf-1993"
+    description: str = "1990s marine VHF Channel 16 radio degradation."
     ffmpeg_command: str = "ffmpeg"
 
     def play(self, path: Path, backend: PlaybackBackend) -> None:
@@ -411,3 +423,10 @@ def get_profile(name: str) -> Profile:
 
 def list_profiles() -> tuple[str, ...]:
     return tuple(sorted(_PROFILES))
+
+
+def list_profile_summaries() -> tuple[ProfileSummary, ...]:
+    return tuple(
+        ProfileSummary(name=name, description=_PROFILES[name].description)
+        for name in sorted(_PROFILES)
+    )
