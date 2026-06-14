@@ -57,22 +57,23 @@ Available profiles:
 
 - `passthrough`: Plays the source file without applying any degradation.
 - `fmradio`: Plays a public FM-radio-style degradation tuned near 98.3 MHz,
-  roughly the middle of the public FM broadcast band. It uses `ffmpeg` to render
+  roughly the middle of the public FM broadcast band. It uses `ffmpeg` to stream
   a stereo broadcast chain with FM-style bandwidth limiting, broadcast
   compression, mild receiver flutter, hiss, low tuner bed noise, and slight
   19 kHz pilot-tone leakage.
 - `gsm`: Plays a narrowband, mono GSM-phone-style degradation. It uses `ffmpeg`
-  to render an 8 kHz speech-band file before playback. If your `ffmpeg` build
+  to stream an 8 kHz speech-band signal by default. If your `ffmpeg` build
   supports the `libgsm` encoder, the profile round-trips through the actual GSM
   Full Rate codec; otherwise it falls back to narrowband filtering, compression,
   and bit-depth crushing.
 - `marine-vhf-1993`: Plays a mono 1990s marine VHF Channel 16-style
-  degradation. It renders clean speech through a staged approximation of a
+  degradation. It streams clean speech through a staged approximation of a
   shipboard push-to-talk microphone, VHF-FM transmitter limiting, receiver
   hiss/threshold flutter, squelch open/close noise, and a small bridge speaker.
 
-On macOS playback uses the system `afplay` command. On other platforms it will
-use `ffplay` when available.
+Playback uses `ffplay` when available so profiled audio can be streamed directly
+to the player instead of being rendered to a temporary file first. If `ffplay`
+is unavailable on macOS, playback falls back to the system `afplay` command.
 
 Example:
 
@@ -81,7 +82,8 @@ uv run fmplay --profile fmradio audio.wav
 ```
 
 Draw a terminal spectrogram in a Kitty graphics protocol terminal such as
-Ghostty:
+Ghostty. Spectrograms are rendered from a profiled temporary file before
+playback:
 
 ```sh
 uv run fmplay --profile gsm --spectrogram audio.wav

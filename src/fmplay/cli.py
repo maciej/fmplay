@@ -58,8 +58,18 @@ def _play_audio(
 
     try:
         with tempfile.TemporaryDirectory(prefix="fmplay-") as temp_dir:
-            prepared_audio = _prepare_profile_audio(profile, audio_file, Path(temp_dir))
+            temp_path = Path(temp_dir)
+            must_render = no_play or spectrogram or spectrogram_file is not None
+            prepared_audio = (
+                _prepare_profile_audio(profile, audio_file, temp_path)
+                if must_render
+                else None
+            )
             if spectrogram or spectrogram_file is not None:
+                if prepared_audio is None:
+                    prepared_audio = _prepare_profile_audio(
+                        profile, audio_file, temp_path
+                    )
                 spectrogram_path = (
                     spectrogram_file or Path(temp_dir) / "spectrogram.png"
                 )
@@ -68,7 +78,13 @@ def _play_audio(
                 if spectrogram_file is None:
                     print_kitty_image(spectrogram_path)
             if not no_play:
-                (backend or default_backend()).play(prepared_audio)
+                playback_backend = backend or default_backend()
+                if prepared_audio is None:
+                    _play_or_stream_profile_audio(
+                        profile, audio_file, temp_path, playback_backend
+                    )
+                else:
+                    playback_backend.play(prepared_audio)
     except KeyboardInterrupt:
         return 130
     except (PlaybackError, ProfileError, SpectrogramError) as exc:
@@ -87,6 +103,23 @@ def _prepare_profile_audio(profile: object, audio_file: Path, temp_dir: Path) ->
         return transformed_path
 
     return audio_file
+
+
+def _play_or_stream_profile_audio(
+    profile: object,
+    audio_file: Path,
+    temp_dir: Path,
+    backend: PlaybackBackend,
+) -> None:
+    stream = getattr(profile, "stream", None)
+    play_stream = getattr(backend, "play_stream", None)
+    if callable(stream) and callable(play_stream):
+        audio_stream = stream(audio_file)
+        if audio_stream is not None:
+            play_stream(audio_stream)
+            return
+
+    backend.play(_prepare_profile_audio(profile, audio_file, temp_dir))
 
 
 def _print_profiles() -> None:
