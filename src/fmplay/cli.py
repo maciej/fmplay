@@ -7,10 +7,18 @@ from typing import Annotated
 
 import typer
 from rich.console import Console
+from rich.table import Table
 from rich.text import Text
 
 from fmplay.backends import PlaybackBackend, PlaybackError, default_backend
-from fmplay.profiles import ProfileError, get_profile, list_profiles
+from fmplay.profiles import (
+    ProfileError,
+    get_profile,
+    list_profile_summaries,
+    list_profiles,
+)
+
+_COMMANDS = frozenset({"play", "profiles"})
 
 
 def _error(message: str) -> None:
@@ -47,6 +55,17 @@ def _play_audio(
     return 0
 
 
+def _print_profiles() -> None:
+    console = Console()
+    console.print("Available profiles:")
+
+    table = Table.grid(padding=(0, 2))
+    for profile in list_profile_summaries():
+        table.add_row(Text(profile.name, style="bold"), profile.description)
+
+    console.print(table)
+
+
 def build_app(backend: PlaybackBackend | None = None) -> typer.Typer:
     app = typer.Typer(
         add_completion=False,
@@ -68,7 +87,25 @@ def build_app(backend: PlaybackBackend | None = None) -> typer.Typer:
     ) -> int:
         return _play_audio(audio_file, profile, backend)
 
+    @app.command()
+    def profiles() -> int:
+        """List available profiles."""
+
+        _print_profiles()
+        return 0
+
     return app
+
+
+def _normalize_argv(argv: Sequence[str] | None) -> list[str] | None:
+    if argv is None:
+        return None
+
+    args = list(argv)
+    if not args or args[0] in _COMMANDS or args[0] in {"--help", "-h"}:
+        return args
+
+    return ["play", *args]
 
 
 def run(
@@ -77,7 +114,7 @@ def run(
     app = build_app(backend)
     try:
         result = app(
-            args=list(argv) if argv is not None else None,
+            args=_normalize_argv(argv),
             prog_name="fmplay",
             standalone_mode=False,
         )

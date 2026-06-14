@@ -45,6 +45,33 @@ def test_passthrough_profile_plays_file(tmp_path: Path) -> None:
     assert backend.played == [audio_file]
 
 
+def test_play_subcommand_plays_file(tmp_path: Path) -> None:
+    audio_file = tmp_path / "audio.wav"
+    audio_file.write_bytes(b"not a real wav; backend is mocked")
+    backend = FakeBackend()
+
+    assert (
+        run(["play", "--profile", "passthrough", str(audio_file)], backend=backend) == 0
+    )
+
+    assert backend.played == [audio_file]
+
+
+def test_profiles_subcommand_lists_available_profiles(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert run(["profiles"], backend=FakeBackend()) == 0
+
+    output = capsys.readouterr().out
+    assert "Available profiles:" in output
+    assert "passthrough" in output
+    assert "Play the source file without applying degradation." in output
+    assert "gsm" in output
+    assert "Narrowband mono GSM-phone-style degradation." in output
+    assert "marine-vhf-1993" in output
+    assert "1990s marine VHF Channel 16 radio degradation." in output
+
+
 def test_keyboard_interrupt_exits_without_traceback(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
