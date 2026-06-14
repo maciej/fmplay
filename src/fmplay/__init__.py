@@ -2,6 +2,7 @@
 
 from fmplay.profiles import (
     GsmCodecProfile,
+    MarineVhf1993Profile,
     PassthroughProfile,
     Profile,
     ProfileError,
@@ -11,6 +12,7 @@ from fmplay.profiles import (
 
 __all__ = [
     "GsmCodecProfile",
+    "MarineVhf1993Profile",
     "PassthroughProfile",
     "Profile",
     "ProfileError",

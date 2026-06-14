@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from fmplay.profiles import GsmCodecProfile, ProfileError
+from fmplay.profiles import GsmCodecProfile, MarineVhf1993Profile, ProfileError
 
 
 class InspectingBackend:
@@ -120,3 +120,68 @@ def test_gsm_profile_reports_ffmpeg_failures(
 
     with pytest.raises(ProfileError, match="Unsupported input format"):
         GsmCodecProfile().render(audio_file, tmp_path / "gsm.wav")
+
+
+def test_marine_vhf_1993_profile_renders_pipeline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audio_file = tmp_path / "audio.wav"
+    audio_file.write_bytes(b"source audio")
+    calls: list[list[str]] = []
+
+    def fake_run(
+        command: list[str],
+        *,
+        check: bool,
+        capture_output: bool,
+        text: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        Path(command[-1]).write_bytes(b"marine vhf output")
+        return subprocess.CompletedProcess(command, 0, stdout="")
+
+    monkeypatch.setattr("fmplay.profiles.subprocess.run", fake_run)
+    backend = InspectingBackend()
+
+    MarineVhf1993Profile().play(audio_file, backend)
+
+    assert backend.played is not None
+    assert backend.played.name == "marine-vhf-1993.wav"
+    assert backend.exists_while_playing
+    assert backend.contents == b"marine vhf output"
+    assert len(calls) == 1
+
+    command = calls[0]
+    assert command[command.index("-ar") + 1] == "24000"
+    assert command[command.index("-ac") + 1] == "1"
+
+    filter_graph = command[command.index("-filter_complex") + 1]
+    assert "highpass=f=260" in filter_graph
+    assert "lowpass=f=3600" in filter_graph
+    assert "acrusher=bits=11" in filter_graph
+    assert "anoisesrc=r=48000:a=0.018:c=white:s=19930114" in filter_graph
+    assert "sine=f=950" in filter_graph
+    assert "concat=n=3" in filter_graph
+
+
+def test_marine_vhf_1993_profile_reports_ffmpeg_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audio_file = tmp_path / "audio.wav"
+    audio_file.write_bytes(b"source audio")
+
+    def fake_run(
+        command: list[str],
+        *,
+        check: bool,
+        capture_output: bool,
+        text: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        raise subprocess.CalledProcessError(
+            returncode=1, cmd=command, stderr="Invalid filter graph"
+        )
+
+    monkeypatch.setattr("fmplay.profiles.subprocess.run", fake_run)
+
+    with pytest.raises(ProfileError, match="Invalid filter graph"):
+        MarineVhf1993Profile().render(audio_file, tmp_path / "marine.wav")

@@ -153,23 +153,49 @@ class GsmCodecProfile:
         )
 
     def _run_ffmpeg(self, args: list[str], action: str) -> None:
-        try:
-            subprocess.run(
-                [self.ffmpeg_command, *args],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-        except FileNotFoundError as exc:
-            raise ProfileError(
-                f"{self.ffmpeg_command} was not found. Install ffmpeg to use "
-                f"the '{self.name}' profile."
-            ) from exc
-        except subprocess.CalledProcessError as exc:
-            raise ProfileError(
-                f"{self.ffmpeg_command} failed while {action}"
-                f"{_format_subprocess_details(exc)}"
-            ) from exc
+        _run_ffmpeg(self.ffmpeg_command, self.name, args, action)
+
+
+@dataclass(frozen=True)
+class MarineVhf1993Profile:
+    """Play audio as a nearby ship may have heard 1993 VHF Channel 16."""
+
+    name: str = "marine-vhf-1993"
+    ffmpeg_command: str = "ffmpeg"
+
+    def play(self, path: Path, backend: PlaybackBackend) -> None:
+        with tempfile.TemporaryDirectory(prefix="fmplay-marine-vhf-1993-") as temp_dir:
+            transformed_path = Path(temp_dir) / "marine-vhf-1993.wav"
+            self.render(path, transformed_path)
+            backend.play(transformed_path)
+
+    def render(self, source_path: Path, output_path: Path) -> None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        _run_ffmpeg(
+            self.ffmpeg_command,
+            self.name,
+            [
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-i",
+                str(source_path),
+                "-vn",
+                "-filter_complex",
+                _marine_vhf_1993_filter_graph(),
+                "-map",
+                "[out]",
+                "-ar",
+                "24000",
+                "-ac",
+                "1",
+                "-c:a",
+                "pcm_s16le",
+                str(output_path),
+            ],
+            "rendering 1993 marine VHF Channel 16 audio",
+        )
 
 
 _GSM_PREFILTER = ",".join(
@@ -188,6 +214,181 @@ _GSM_FALLBACK_FILTER = ",".join(
 )
 
 
+@dataclass(frozen=True)
+class _FilterStage:
+    name: str
+    graph: str
+
+
+_MARINE_VHF_1993_STAGES = (
+    _FilterStage(
+        "transmitter microphone and limiter",
+        ",".join(
+            [
+                "[0:a]aresample=48000",
+                "aformat=channel_layouts=mono",
+                "highpass=f=260",
+                "lowpass=f=3600",
+                (
+                    "compand=attacks=0.004:decays=0.08:"
+                    "points=-80/-70|-45/-30|-24/-14|-12/-7|-3/-2|0/-1:"
+                    "soft-knee=2:gain=5"
+                ),
+                "alimiter=limit=0.88",
+                "acrusher=bits=11:mode=log:aa=1",
+                "tremolo=f=3.2:d=0.035",
+                r"volume='if(lt(mod(t\,2.4)\,0.035)\,0.62\,1)':eval=frame",
+            ]
+        )
+        + "[tx]",
+    ),
+    _FilterStage(
+        "vhf receiver hiss",
+        ",".join(
+            [
+                "anoisesrc=r=48000:a=0.018:c=white:s=19930114",
+                "highpass=f=2400",
+                "lowpass=f=6200",
+            ]
+        )
+        + "[hiss]",
+    ),
+    _FilterStage(
+        "shipboard power rumble",
+        ",".join(
+            [
+                "anoisesrc=r=48000:a=0.006:c=pink:s=19930115",
+                "lowpass=f=260",
+            ]
+        )
+        + "[rumble]",
+    ),
+    _FilterStage(
+        "nearby ship receiver speaker",
+        ",".join(
+            [
+                "[tx][hiss][rumble]amix=inputs=3:duration=first:"
+                "weights='1 0.35 0.12':normalize=0",
+                "highpass=f=330",
+                "lowpass=f=3100",
+                "equalizer=f=850:t=q:w=1.3:g=4",
+                "equalizer=f=2300:t=q:w=1.4:g=-3",
+                "alimiter=limit=0.92",
+            ]
+        )
+        + "[body]",
+    ),
+    _FilterStage(
+        "squelch open noise",
+        ",".join(
+            [
+                "anoisesrc=r=48000:a=0.075:c=white:d=0.11:s=19930116",
+                "highpass=f=2200",
+                "lowpass=f=6200",
+                "afade=t=out:st=0.04:d=0.07",
+            ]
+        )
+        + "[open_noise]",
+    ),
+    _FilterStage(
+        "push-to-talk open click",
+        ",".join(
+            [
+                "sine=f=950:r=48000:d=0.018",
+                "afade=t=out:st=0:d=0.018",
+                "volume=2.8",
+            ]
+        )
+        + "[open_click]",
+    ),
+    _FilterStage(
+        "squelch open mix",
+        ",".join(
+            [
+                "[open_noise][open_click]amix=inputs=2:duration=longest:normalize=0",
+                "alimiter=limit=0.9",
+            ]
+        )
+        + "[open]",
+    ),
+    _FilterStage(
+        "squelch tail noise",
+        ",".join(
+            [
+                "anoisesrc=r=48000:a=0.08:c=white:d=0.22:s=19930117",
+                "highpass=f=2200",
+                "lowpass=f=6200",
+                "afade=t=out:st=0.13:d=0.09",
+            ]
+        )
+        + "[tail_noise]",
+    ),
+    _FilterStage(
+        "push-to-talk release click",
+        ",".join(
+            [
+                "sine=f=520:r=48000:d=0.022",
+                "afade=t=out:st=0:d=0.022",
+                "volume=1.8",
+            ]
+        )
+        + "[tail_click]",
+    ),
+    _FilterStage(
+        "squelch tail mix",
+        ",".join(
+            [
+                "[tail_click][tail_noise]amix=inputs=2:duration=longest:normalize=0",
+                "alimiter=limit=0.9",
+            ]
+        )
+        + "[tail]",
+    ),
+    _FilterStage(
+        "final concatenation",
+        ",".join(
+            [
+                "[open][body][tail]concat=n=3:v=0:a=1",
+                "aresample=24000",
+                "aformat=channel_layouts=mono",
+                "alimiter=limit=0.95",
+            ]
+        )
+        + "[out]",
+    ),
+)
+
+
+def _marine_vhf_1993_filter_graph() -> str:
+    graphs: list[str] = []
+    for stage in _MARINE_VHF_1993_STAGES:
+        if not stage.name:
+            raise ProfileError("Marine VHF profile contains an unnamed filter stage.")
+        graphs.append(stage.graph)
+    return ";".join(graphs)
+
+
+def _run_ffmpeg(
+    ffmpeg_command: str, profile_name: str, args: list[str], action: str
+) -> None:
+    try:
+        subprocess.run(
+            [ffmpeg_command, *args],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError as exc:
+        raise ProfileError(
+            f"{ffmpeg_command} was not found. Install ffmpeg to use "
+            f"the '{profile_name}' profile."
+        ) from exc
+    except subprocess.CalledProcessError as exc:
+        raise ProfileError(
+            f"{ffmpeg_command} failed while {action}{_format_subprocess_details(exc)}"
+        ) from exc
+
+
 def _format_subprocess_details(exc: subprocess.CalledProcessError) -> str:
     details = (exc.stderr or exc.stdout or "").strip()
     if not details:
@@ -199,6 +400,7 @@ def _format_subprocess_details(exc: subprocess.CalledProcessError) -> str:
 
 _PROFILES: dict[str, Profile] = {
     GsmCodecProfile.name: GsmCodecProfile(),
+    MarineVhf1993Profile.name: MarineVhf1993Profile(),
     PassthroughProfile.name: PassthroughProfile(),
 }
 

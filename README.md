@@ -60,6 +60,10 @@ Available profiles:
   supports the `libgsm` encoder, the profile round-trips through the actual GSM
   Full Rate codec; otherwise it falls back to narrowband filtering, compression,
   and bit-depth crushing.
+- `marine-vhf-1993`: Plays a mono 1990s marine VHF Channel 16-style
+  degradation. It renders clean speech through a staged approximation of a
+  shipboard push-to-talk microphone, VHF-FM transmitter limiting, receiver
+  hiss/threshold flutter, squelch open/close noise, and a small bridge speaker.
 
 On macOS playback uses the system `afplay` command. On other platforms it will
 use `ffplay` when available.
@@ -68,6 +72,12 @@ Example:
 
 ```sh
 uv run fmplay --profile gsm audio.wav
+```
+
+Preview the Jan Heweliusz distress source through the historical VHF profile:
+
+```sh
+uv run fmplay --profile marine-vhf-1993 clips/audio/jan_heweliusz_mayday.mp3
 ```
 
 Run checks:
