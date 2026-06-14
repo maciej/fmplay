@@ -17,6 +17,10 @@ The Jan Heweliusz recipe currently writes:
 - `clips/audio/jan_heweliusz_mayday.mp3`
 - `clips/audio/jan_heweliusz_abandon_ship.mp3`
 
+The Biebrza fake radio-programme recipe writes:
+
+- `clips/audio/biebrza_broadcast.mp3`
+
 These files are clean source takes. Use `fmplay` profiles for historical radio,
 microphone, receiver, or codec degradation.
 
@@ -30,4 +34,10 @@ Preview the mayday clip through a 1993 marine VHF Channel 16 profile:
 
 ```sh
 uv run fmplay --profile marine-vhf-1993 clips/audio/jan_heweliusz_mayday.mp3
+```
+
+Preview the Biebrza fake radio programme through a radio profile:
+
+```sh
+uv run fmplay --profile marine-vhf-1993 clips/audio/biebrza_broadcast.mp3
 ```
