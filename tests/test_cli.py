@@ -45,6 +45,149 @@ def test_passthrough_profile_plays_file(tmp_path: Path) -> None:
     assert backend.played == [audio_file]
 
 
+def test_no_play_skips_playback(tmp_path: Path) -> None:
+    audio_file = tmp_path / "audio.wav"
+    audio_file.write_bytes(b"not a real wav; backend is mocked")
+    backend = FakeBackend()
+
+    assert run(["--no-play", str(audio_file)], backend=backend) == 0
+
+    assert backend.played == []
+
+
+def test_no_play_still_renders_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audio_file = tmp_path / "audio.wav"
+    audio_file.write_bytes(b"source audio")
+    backend = FakeBackend()
+    calls: list[list[str]] = []
+
+    def fake_run(
+        command: list[str],
+        *,
+        check: bool,
+        capture_output: bool,
+        text: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        Path(command[-1]).write_bytes(b"marine vhf output")
+        return subprocess.CompletedProcess(command, 0, stdout="")
+
+    monkeypatch.setattr("fmplay.profiles.subprocess.run", fake_run)
+
+    assert (
+        run(
+            ["--profile", "marine-vhf-1993", "--no-play", str(audio_file)],
+            backend=backend,
+        )
+        == 0
+    )
+
+    assert backend.played == []
+    assert len(calls) == 1
+
+
+def test_spectrogram_uses_passthrough_audio(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audio_file = tmp_path / "audio.wav"
+    audio_file.write_bytes(b"not a real wav; spectrogram is mocked")
+    backend = FakeBackend()
+    rendered_audio_paths: list[Path] = []
+    printed_paths: list[Path] = []
+
+    def fake_render_spectrogram(audio_path: Path, output_path: Path) -> None:
+        rendered_audio_paths.append(audio_path)
+        output_path.write_bytes(b"png")
+
+    monkeypatch.setattr("fmplay.cli.render_spectrogram_image", fake_render_spectrogram)
+    monkeypatch.setattr("fmplay.cli.print_kitty_image", printed_paths.append)
+
+    assert run(["--no-play", "--spectrogram", str(audio_file)], backend=backend) == 0
+
+    assert backend.played == []
+    assert rendered_audio_paths == [audio_file]
+    assert printed_paths[0].name == "spectrogram.png"
+
+
+def test_spectrogram_can_render_to_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audio_file = tmp_path / "audio.wav"
+    audio_file.write_bytes(b"not a real wav; spectrogram is mocked")
+    output_file = tmp_path / "spectrogram.png"
+    backend = FakeBackend()
+    rendered_audio_paths: list[Path] = []
+
+    def fake_render_spectrogram(audio_path: Path, output_path: Path) -> None:
+        rendered_audio_paths.append(audio_path)
+        output_path.write_bytes(b"png")
+
+    monkeypatch.setattr("fmplay.cli.render_spectrogram_image", fake_render_spectrogram)
+    monkeypatch.setattr(
+        "fmplay.cli.print_kitty_image",
+        lambda path: pytest.fail("file output should not use terminal graphics"),
+    )
+
+    assert (
+        run(
+            ["--no-play", f"--spectrogram={output_file}", str(audio_file)],
+            backend=backend,
+        )
+        == 0
+    )
+
+    assert backend.played == []
+    assert rendered_audio_paths == [audio_file]
+    assert output_file.read_bytes() == b"png"
+
+
+def test_spectrogram_uses_profile_rendered_audio(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audio_file = tmp_path / "audio.wav"
+    audio_file.write_bytes(b"source audio")
+    backend = FakeBackend()
+    rendered_audio: list[tuple[Path, bytes]] = []
+
+    def fake_run(
+        command: list[str],
+        *,
+        check: bool,
+        capture_output: bool,
+        text: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        Path(command[-1]).write_bytes(b"marine vhf output")
+        return subprocess.CompletedProcess(command, 0, stdout="")
+
+    def fake_render_spectrogram(audio_path: Path, output_path: Path) -> None:
+        rendered_audio.append((audio_path, audio_path.read_bytes()))
+        output_path.write_bytes(b"png")
+
+    monkeypatch.setattr("fmplay.profiles.subprocess.run", fake_run)
+    monkeypatch.setattr("fmplay.cli.render_spectrogram_image", fake_render_spectrogram)
+    monkeypatch.setattr("fmplay.cli.print_kitty_image", lambda path: None)
+
+    assert (
+        run(
+            [
+                "--profile",
+                "marine-vhf-1993",
+                "--no-play",
+                "--spectrogram",
+                str(audio_file),
+            ],
+            backend=backend,
+        )
+        == 0
+    )
+
+    assert backend.played == []
+    assert rendered_audio[0][0].name == "marine-vhf-1993.wav"
+    assert rendered_audio[0][1] == b"marine vhf output"
+
+
 def test_keyboard_interrupt_exits_without_traceback(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
