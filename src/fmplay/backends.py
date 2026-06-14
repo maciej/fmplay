@@ -67,6 +67,21 @@ class FfplayBackend(SubprocessBackend):
     def __init__(self) -> None:
         super().__init__("ffplay", ("ffplay", "-nodisp", "-autoexit"))
 
+    def play(self, path: Path) -> None:
+        try:
+            subprocess.run(
+                [*self.command, str(path)],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except FileNotFoundError as exc:
+            raise PlaybackError("Playback command not found: ffplay") from exc
+        except subprocess.CalledProcessError as exc:
+            raise PlaybackError(
+                f"{self.name} failed while playing {path}: exit code {exc.returncode}"
+            ) from exc
+
     def play_stream(self, stream: AudioStream) -> None:
         try:
             producer = subprocess.Popen(
@@ -94,6 +109,8 @@ class FfplayBackend(SubprocessBackend):
             player_result = subprocess.run(
                 player_command,
                 stdin=producer.stdout,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
                 check=False,
             )
         except FileNotFoundError as exc:
