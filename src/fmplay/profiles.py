@@ -232,6 +232,80 @@ class _FilterStage:
     graph: str
 
 
+_MARINE_VHF_STATIC_FLUTTER = (
+    r"volume='0.78+0.07*sin(13.7*t)+0.04*sin(51*t)+"
+    r"if(lt(mod(t+0.07\,0.37)\,0.026)\,0.18\,0)':eval=frame"
+)
+
+
+def _marine_vhf_receiver_static_graph(
+    *,
+    prefix: str,
+    duration: str,
+    hiss_seed: int,
+    low_seed: int,
+    crackle_gate_state: int,
+    crackle_level_state: int,
+    fade_filters: tuple[str, ...],
+    output: str,
+) -> str:
+    return ";".join(
+        [
+            ",".join(
+                [
+                    f"anoisesrc=r=48000:a=0.034:c=white:d={duration}:s={hiss_seed}",
+                    "highpass=f=1600",
+                    "lowpass=f=6400",
+                    "equalizer=f=3100:t=q:w=1.4:g=2.5",
+                    "tremolo=f=7.3:d=0.06",
+                    _MARINE_VHF_STATIC_FLUTTER,
+                ]
+            )
+            + f"[{prefix}_hiss]",
+            ",".join(
+                [
+                    (
+                        "aevalsrc='if(lt(random("
+                        f"{crackle_gate_state}"
+                        r")\,0.00032)\,random("
+                        f"{crackle_level_state}"
+                        r")*2-1\,0)':s=48000:d="
+                        f"{duration}"
+                    ),
+                    "highpass=f=2600",
+                    "lowpass=f=9000",
+                    "volume=0.55",
+                ]
+            )
+            + f"[{prefix}_crackle]",
+            ",".join(
+                [
+                    f"anoisesrc=r=48000:a=0.01:c=pink:d={duration}:s={low_seed}",
+                    "highpass=f=90",
+                    "lowpass=f=520",
+                ]
+            )
+            + f"[{prefix}_low]",
+            ",".join(
+                [
+                    (
+                        f"[{prefix}_hiss][{prefix}_crackle][{prefix}_low]"
+                        "amix=inputs=3:duration=longest:"
+                        "weights='1 0.28 0.12':normalize=0"
+                    ),
+                    "highpass=f=260",
+                    "lowpass=f=5600",
+                    "equalizer=f=900:t=q:w=1.1:g=1.5",
+                    "equalizer=f=2800:t=q:w=1.2:g=-1.8",
+                    *fade_filters,
+                    "alimiter=limit=0.88",
+                ]
+            )
+            + f"[{output}]",
+        ]
+    )
+
+
 _MARINE_VHF_1993_STAGES = (
     _FilterStage(
         "transmitter microphone and limiter",
@@ -261,6 +335,8 @@ _MARINE_VHF_1993_STAGES = (
                 "anoisesrc=r=48000:a=0.018:c=white:s=19930114",
                 "highpass=f=2400",
                 "lowpass=f=6200",
+                "tremolo=f=5.1:d=0.025",
+                r"volume='0.93+0.04*sin(17*t)':eval=frame",
             ]
         )
         + "[hiss]",
@@ -274,6 +350,22 @@ _MARINE_VHF_1993_STAGES = (
             ]
         )
         + "[rumble]",
+    ),
+    _FilterStage(
+        "pre-transmission receiver static",
+        _marine_vhf_receiver_static_graph(
+            prefix="pre",
+            duration="0.65",
+            hiss_seed=19930112,
+            low_seed=19930111,
+            crackle_gate_state=2,
+            crackle_level_state=3,
+            fade_filters=(
+                "afade=t=in:st=0:d=0.015",
+                "afade=t=out:st=0.56:d=0.09",
+            ),
+            output="pre_static",
+        ),
     ),
     _FilterStage(
         "nearby ship receiver speaker",
@@ -357,13 +449,27 @@ _MARINE_VHF_1993_STAGES = (
         + "[tail]",
     ),
     _FilterStage(
+        "post-transmission receiver static",
+        _marine_vhf_receiver_static_graph(
+            prefix="post",
+            duration="0.85",
+            hiss_seed=19930118,
+            low_seed=19930119,
+            crackle_gate_state=4,
+            crackle_level_state=5,
+            fade_filters=("afade=t=out:st=0.72:d=0.13",),
+            output="post_static",
+        ),
+    ),
+    _FilterStage(
         "final concatenation",
         ",".join(
             [
-                "[open][body][tail]concat=n=3:v=0:a=1",
+                "[pre_static][open][body][tail][post_static]concat=n=5:v=0:a=1",
                 "aresample=24000",
                 "aformat=channel_layouts=mono",
                 "alimiter=limit=0.95",
+                "volume=0.9",
             ]
         )
         + "[out]",

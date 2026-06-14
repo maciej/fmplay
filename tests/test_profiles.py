@@ -159,9 +159,16 @@ def test_marine_vhf_1993_profile_renders_pipeline(
     assert "highpass=f=260" in filter_graph
     assert "lowpass=f=3600" in filter_graph
     assert "acrusher=bits=11" in filter_graph
+    assert "anoisesrc=r=48000:a=0.034:c=white:d=0.65:s=19930112" in filter_graph
+    assert "anoisesrc=r=48000:a=0.01:c=pink:d=0.65:s=19930111" in filter_graph
+    assert "random(2)" in filter_graph
     assert "anoisesrc=r=48000:a=0.018:c=white:s=19930114" in filter_graph
+    assert "tremolo=f=5.1:d=0.025" in filter_graph
+    assert "anoisesrc=r=48000:a=0.034:c=white:d=0.85:s=19930118" in filter_graph
+    assert "random(4)" in filter_graph
     assert "sine=f=950" in filter_graph
-    assert "concat=n=3" in filter_graph
+    assert "concat=n=5" in filter_graph
+    assert "volume=0.9" in filter_graph
 
 
 def test_marine_vhf_1993_profile_reports_ffmpeg_failures(
