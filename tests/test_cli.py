@@ -339,6 +339,8 @@ def test_profiles_subcommand_lists_available_profiles(
     assert "Play the source file without applying degradation." in output
     assert "gsm" in output
     assert "Narrowband mono GSM-phone-style degradation." in output
+    assert "libgsm" in output
+    assert "Native libgsm GSM Full Rate codec round-trip." in output
     assert "fmradio" in output
     assert "Public FM radio degradation tuned near 98.3 MHz." in output
     assert "marine-vhf-1993" in output

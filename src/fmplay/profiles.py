@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
 from fmplay.backends import AudioStream, PlaybackBackend
+from fmplay.libgsm import LibGsmError, NativeLibGsmCodec
 
 
 class ProfileError(RuntimeError):
@@ -216,6 +218,54 @@ class GsmCodecProfile:
 
     def _run_ffmpeg(self, args: list[str], action: str) -> None:
         _run_ffmpeg(self.ffmpeg_command, self.name, args, action)
+
+
+@dataclass(frozen=True)
+class LibGsmProfile:
+    """Round-trip audio through native libgsm without ffmpeg codec support."""
+
+    name: str = "libgsm"
+    description: str = "Native libgsm GSM Full Rate codec round-trip."
+    ffmpeg_command: str = "ffmpeg"
+
+    def play(self, path: Path, backend: PlaybackBackend) -> None:
+        with tempfile.TemporaryDirectory(prefix="fmplay-libgsm-") as temp_dir:
+            transformed_path = Path(temp_dir) / "libgsm.wav"
+            self.render(path, transformed_path)
+            backend.play(transformed_path)
+
+    def render(self, source_path: Path, output_path: Path) -> None:
+        try:
+            NativeLibGsmCodec().round_trip_file(
+                source_path,
+                output_path,
+                ffmpeg_command=self.ffmpeg_command,
+                filter_graph=_GSM_PREFILTER,
+            )
+        except LibGsmError as exc:
+            raise ProfileError(str(exc)) from exc
+
+    def stream(self, source_path: Path) -> AudioStream:
+        try:
+            NativeLibGsmCodec.ensure_available()
+        except LibGsmError as exc:
+            raise ProfileError(str(exc)) from exc
+
+        return AudioStream(
+            command=(
+                sys.executable,
+                "-m",
+                "fmplay.libgsm_stream",
+                "--ffmpeg",
+                self.ffmpeg_command,
+                "--filter",
+                _GSM_PREFILTER,
+                str(source_path),
+            ),
+            input_format="s16le",
+            sample_rate=8000,
+            channel_layout="mono",
+        )
 
 
 @dataclass(frozen=True)
@@ -747,6 +797,7 @@ def _format_subprocess_details(exc: subprocess.CalledProcessError) -> str:
 _PROFILES: dict[str, Profile] = {
     FmRadioProfile.name: FmRadioProfile(),
     GsmCodecProfile.name: GsmCodecProfile(),
+    LibGsmProfile.name: LibGsmProfile(),
     MarineVhf1993Profile.name: MarineVhf1993Profile(),
     PassthroughProfile.name: PassthroughProfile(),
 }
