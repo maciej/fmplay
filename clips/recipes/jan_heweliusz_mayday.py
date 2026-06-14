@@ -37,11 +37,17 @@ class Clip:
 
 CLIPS = {
     "mayday": Clip(
-        text="Mayday, mayday, mayday! Jan Heweliusz.",
+        text=(
+            "Mayday, Mayday, all ships, all ships. This is lorry ferry "
+            "Jan Heweliusz. Heavy list to portside. I am in danger. "
+            "My position shortly, near Kolliker. Sixteen miles west from Arkona."
+        ),
         output_path=OUTPUT_DIR / "jan_heweliusz_mayday.mp3",
         explanation=(
             "At 04:36 during the 14 January 1993 MF Jan Heweliusz disaster, "
-            "Captain Andrzej Ulasiewicz transmitted this radio distress call."
+            "Captain Andrzej Ulasiewicz transmitted this radio distress call. "
+            "This recipe intentionally renders a clean source take; radio, "
+            "microphone, and receiver degradation belongs in fmplay profiles."
         ),
     ),
     "abandon_ship": Clip(

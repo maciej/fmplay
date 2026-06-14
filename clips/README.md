@@ -17,8 +17,17 @@ The Jan Heweliusz recipe currently writes:
 - `clips/audio/jan_heweliusz_mayday.mp3`
 - `clips/audio/jan_heweliusz_abandon_ship.mp3`
 
+These files are clean source takes. Use `fmplay` profiles for historical radio,
+microphone, receiver, or codec degradation.
+
 Regenerate only one clip with:
 
 ```sh
 ./clips/recipes/jan_heweliusz_mayday.py --clip abandon_ship
+```
+
+Preview the mayday clip through a 1993 marine VHF Channel 16 profile:
+
+```sh
+uv run fmplay --profile marine-vhf-1993 clips/audio/jan_heweliusz_mayday.mp3
 ```
