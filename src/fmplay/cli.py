@@ -8,15 +8,23 @@ from typing import Annotated
 
 import typer
 from rich.console import Console
+from rich.table import Table
 from rich.text import Text
 
 from fmplay.backends import PlaybackBackend, PlaybackError, default_backend
-from fmplay.profiles import ProfileError, get_profile, list_profiles
+from fmplay.profiles import (
+    ProfileError,
+    get_profile,
+    list_profile_summaries,
+    list_profiles,
+)
 from fmplay.spectrogram import (
     SpectrogramError,
     print_kitty_image,
     render_spectrogram_image,
 )
+
+_COMMANDS = frozenset({"play", "profiles"})
 
 
 def _error(message: str) -> None:
@@ -81,6 +89,17 @@ def _prepare_profile_audio(profile: object, audio_file: Path, temp_dir: Path) ->
     return audio_file
 
 
+def _print_profiles() -> None:
+    console = Console()
+    console.print("Available profiles:")
+
+    table = Table.grid(padding=(0, 2))
+    for profile in list_profile_summaries():
+        table.add_row(Text(profile.name, style="bold"), profile.description)
+
+    console.print(table)
+
+
 def build_app(backend: PlaybackBackend | None = None) -> typer.Typer:
     app = typer.Typer(
         add_completion=False,
@@ -133,7 +152,25 @@ def build_app(backend: PlaybackBackend | None = None) -> typer.Typer:
             spectrogram_file=spectrogram_file,
         )
 
+    @app.command()
+    def profiles() -> int:
+        """List available profiles."""
+
+        _print_profiles()
+        return 0
+
     return app
+
+
+def _normalize_argv(argv: Sequence[str] | None) -> list[str] | None:
+    if argv is None:
+        return None
+
+    args = _normalize_spectrogram_args(argv)
+    if not args or args[0] in _COMMANDS or args[0] in {"--help", "-h"}:
+        return args
+
+    return ["play", *args]
 
 
 def run(
@@ -143,7 +180,7 @@ def run(
     args = list(argv) if argv is not None else sys.argv[1:]
     try:
         result = app(
-            args=_normalize_spectrogram_args(args),
+            args=_normalize_argv(args),
             prog_name="fmplay",
             standalone_mode=False,
         )
