@@ -5,7 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from fmplay.profiles import GsmCodecProfile, MarineVhf1993Profile, ProfileError
+from fmplay.profiles import (
+    FmRadioProfile,
+    GsmCodecProfile,
+    MarineVhf1993Profile,
+    ProfileError,
+)
 
 
 class InspectingBackend:
@@ -192,3 +197,70 @@ def test_marine_vhf_1993_profile_reports_ffmpeg_failures(
 
     with pytest.raises(ProfileError, match="Invalid filter graph"):
         MarineVhf1993Profile().render(audio_file, tmp_path / "marine.wav")
+
+
+def test_fmradio_profile_renders_pipeline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audio_file = tmp_path / "audio.wav"
+    audio_file.write_bytes(b"source audio")
+    calls: list[list[str]] = []
+
+    def fake_run(
+        command: list[str],
+        *,
+        check: bool,
+        capture_output: bool,
+        text: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        Path(command[-1]).write_bytes(b"fm radio output")
+        return subprocess.CompletedProcess(command, 0, stdout="")
+
+    monkeypatch.setattr("fmplay.profiles.subprocess.run", fake_run)
+    backend = InspectingBackend()
+
+    FmRadioProfile().play(audio_file, backend)
+
+    assert backend.played is not None
+    assert backend.played.name == "fmradio.wav"
+    assert backend.exists_while_playing
+    assert backend.contents == b"fm radio output"
+    assert len(calls) == 1
+
+    command = calls[0]
+    assert command[command.index("-ar") + 1] == "44100"
+    assert command[command.index("-ac") + 1] == "2"
+
+    filter_graph = command[command.index("-filter_complex") + 1]
+    assert "aformat=channel_layouts=stereo" in filter_graph
+    assert "highpass=f=45" in filter_graph
+    assert "lowpass=f=15000" in filter_graph
+    assert "compand=attacks=0.006" in filter_graph
+    assert "anoisesrc=r=48000:a=0.0045:c=white:s=98301" in filter_graph
+    assert "anoisesrc=r=48000:a=0.0014:c=pink:s=98302" in filter_graph
+    assert "sine=f=19000" in filter_graph
+    assert "volume=0.92" in filter_graph
+
+
+def test_fmradio_profile_reports_ffmpeg_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audio_file = tmp_path / "audio.wav"
+    audio_file.write_bytes(b"source audio")
+
+    def fake_run(
+        command: list[str],
+        *,
+        check: bool,
+        capture_output: bool,
+        text: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        raise subprocess.CalledProcessError(
+            returncode=1, cmd=command, stderr="Invalid FM filter graph"
+        )
+
+    monkeypatch.setattr("fmplay.profiles.subprocess.run", fake_run)
+
+    with pytest.raises(ProfileError, match="Invalid FM filter graph"):
+        FmRadioProfile().render(audio_file, tmp_path / "fmradio.wav")

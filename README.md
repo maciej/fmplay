@@ -56,6 +56,11 @@ uv run fmplay --profile passthrough audio.wav
 Available profiles:
 
 - `passthrough`: Plays the source file without applying any degradation.
+- `fmradio`: Plays a public FM-radio-style degradation tuned near 98.3 MHz,
+  roughly the middle of the public FM broadcast band. It uses `ffmpeg` to render
+  a stereo broadcast chain with FM-style bandwidth limiting, broadcast
+  compression, mild receiver flutter, hiss, low tuner bed noise, and slight
+  19 kHz pilot-tone leakage.
 - `gsm`: Plays a narrowband, mono GSM-phone-style degradation. It uses `ffmpeg`
   to render an 8 kHz speech-band file before playback. If your `ffmpeg` build
   supports the `libgsm` encoder, the profile round-trips through the actual GSM
@@ -72,7 +77,7 @@ use `ffplay` when available.
 Example:
 
 ```sh
-uv run fmplay --profile gsm audio.wav
+uv run fmplay --profile fmradio audio.wav
 ```
 
 Draw a terminal spectrogram in a Kitty graphics protocol terminal such as
