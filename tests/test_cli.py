@@ -88,6 +88,36 @@ def test_no_play_still_renders_profile(
     assert len(calls) == 1
 
 
+def test_profile_primitives_are_printed(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audio_file = tmp_path / "audio.wav"
+    audio_file.write_bytes(b"source audio")
+
+    def fake_run(
+        command: list[str],
+        *,
+        check: bool,
+        capture_output: bool,
+        text: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        Path(command[-1]).write_bytes(b"fm radio output")
+        return subprocess.CompletedProcess(command, 0, stdout="")
+
+    monkeypatch.setattr("fmplay.profiles.subprocess.run", fake_run)
+
+    assert run(["--profile", "fmradio", "--no-play", str(audio_file)]) == 0
+
+    output = capsys.readouterr().out
+    assert "fmradio profile" in output
+    assert "Applied transformations" in output
+    assert "broadcast processor" in output
+    assert "receiver speaker output" in output
+    assert "highpass=f=45" in output
+
+
 def test_spectrogram_uses_passthrough_audio(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -186,6 +216,39 @@ def test_spectrogram_uses_profile_rendered_audio(
     assert backend.played == []
     assert rendered_audio[0][0].name == "marine-vhf-1993.wav"
     assert rendered_audio[0][1] == b"marine vhf output"
+
+
+def test_profile_primitives_are_not_printed_for_terminal_spectrogram(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audio_file = tmp_path / "audio.wav"
+    audio_file.write_bytes(b"source audio")
+
+    def fake_run(
+        command: list[str],
+        *,
+        check: bool,
+        capture_output: bool,
+        text: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        Path(command[-1]).write_bytes(b"fm radio output")
+        return subprocess.CompletedProcess(command, 0, stdout="")
+
+    def fake_render_spectrogram(audio_path: Path, output_path: Path) -> None:
+        output_path.write_bytes(b"png")
+
+    monkeypatch.setattr("fmplay.profiles.subprocess.run", fake_run)
+    monkeypatch.setattr("fmplay.cli.render_spectrogram_image", fake_render_spectrogram)
+    monkeypatch.setattr("fmplay.cli.print_kitty_image", lambda path: None)
+
+    assert (
+        run(["--profile", "fmradio", "--no-play", "--spectrogram", str(audio_file)])
+        == 0
+    )
+
+    assert capsys.readouterr().out == ""
 
 
 def test_play_subcommand_plays_file(tmp_path: Path) -> None:
