@@ -18,6 +18,13 @@ class FakeBackend:
         self.played.append(path)
 
 
+class InterruptingBackend:
+    name = "interrupting"
+
+    def play(self, path: Path) -> None:
+        raise KeyboardInterrupt
+
+
 def test_default_profile_plays_file(tmp_path: Path) -> None:
     audio_file = tmp_path / "audio.wav"
     audio_file.write_bytes(b"not a real wav; backend is mocked")
@@ -36,6 +43,17 @@ def test_passthrough_profile_plays_file(tmp_path: Path) -> None:
     assert run(["--profile", "passthrough", str(audio_file)], backend=backend) == 0
 
     assert backend.played == [audio_file]
+
+
+def test_keyboard_interrupt_exits_without_traceback(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    audio_file = tmp_path / "audio.wav"
+    audio_file.write_bytes(b"not a real wav; backend is mocked")
+
+    assert run([str(audio_file)], backend=InterruptingBackend()) == 130
+
+    assert capsys.readouterr().err == ""
 
 
 def test_missing_file_exits_with_message(capsys: pytest.CaptureFixture[str]) -> None:
