@@ -4,18 +4,24 @@
 # dependencies = [
 #   "elevenlabs>=2.15.0",
 #   "python-dotenv>=1.0.1",
+#   "rich>=15.0.0",
+#   "typer>=0.26.0",
 # ]
 # ///
 
 from __future__ import annotations
 
-import argparse
 import os
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
+from typing import Annotated
 
+import typer
 from dotenv import load_dotenv
 from elevenlabs import ElevenLabs, VoiceSettings
+from rich.console import Console
+from rich.text import Text
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 OUTPUT_DIR = REPO_ROOT / "clips" / "audio"
@@ -65,6 +71,20 @@ CLIPS = {
 }
 
 
+class ClipName(StrEnum):
+    mayday = "mayday"
+    abandon_ship = "abandon_ship"
+
+
+console = Console()
+err_console = Console(stderr=True)
+app = typer.Typer(
+    add_completion=False,
+    help="Generate Jan Heweliusz distress-call clips.",
+    rich_markup_mode="rich",
+)
+
+
 def resolve_api_key() -> str:
     load_dotenv(REPO_ROOT / ".env")
 
@@ -106,46 +126,46 @@ def render_clip(client: ElevenLabs, clip: Clip, output_path: Path) -> None:
             handle.write(chunk)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Generate Jan Heweliusz distress-call clips."
-    )
-    parser.add_argument(
-        "--clip",
-        choices=sorted(CLIPS),
-        help="Generate only one clip. Defaults to all clips.",
-    )
-    parser.add_argument(
-        "-o",
-        "--output",
-        type=Path,
-        help="Override output audio path. Only valid with --clip.",
-    )
-    parser.add_argument(
-        "--explain",
-        action="store_true",
-        help="Print clip explanations and exit.",
-    )
-    args = parser.parse_args()
+@app.command()
+def main(
+    clip: Annotated[
+        ClipName | None,
+        typer.Option("--clip", help="Generate only one clip. Defaults to all clips."),
+    ] = None,
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            "-o",
+            "--output",
+            help="Override output audio path. Only valid with --clip.",
+        ),
+    ] = None,
+    explain: Annotated[
+        bool, typer.Option("--explain", help="Print clip explanations and exit.")
+    ] = False,
+) -> None:
+    clip_name = clip.value if clip else None
+    selected_clips = {clip_name: CLIPS[clip_name]} if clip_name else CLIPS
 
-    selected_clips = {args.clip: CLIPS[args.clip]} if args.clip else CLIPS
+    if output and not clip:
+        err_console.print(
+            "recipe: ", Text("--output can only be used with --clip"), sep=""
+        )
+        raise typer.Exit(2)
 
-    if args.output and not args.clip:
-        parser.error("--output can only be used with --clip")
-
-    if args.explain:
+    if explain:
         for name, clip in selected_clips.items():
-            print(f"{name}: {clip.explanation}")
+            console.print(f"{name}: {clip.explanation}")
         return
 
     client = ElevenLabs(api_key=resolve_api_key())
     for name, clip in selected_clips.items():
-        output_path = args.output if args.output else clip.output_path
+        output_path = output if output else clip.output_path
         render_clip(client, clip, output_path)
-        print(f"Wrote {output_path}")
-        print(f"{name}: {clip.explanation}")
-    print(f"Voice: {VOICE_NAME} ({VOICE_ID})")
+        console.print(f"Wrote {output_path}")
+        console.print(f"{name}: {clip.explanation}")
+    console.print(f"Voice: {VOICE_NAME} ({VOICE_ID})")
 
 
 if __name__ == "__main__":
-    main()
+    app()

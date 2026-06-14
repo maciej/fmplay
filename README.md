@@ -38,6 +38,7 @@ The project will primarily be written in Python.
 Use:
 
 - `uv` for Python environment, dependency, and command management.
+- `typer` and `rich` for CLI parsing, help, and terminal output.
 - `ruff` for linting and formatting.
 
 Set up the project:

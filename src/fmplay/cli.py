@@ -1,58 +1,91 @@
 from __future__ import annotations
 
-import argparse
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Annotated
+
+import typer
+from rich.console import Console
+from rich.text import Text
 
 from fmplay.backends import PlaybackBackend, PlaybackError, default_backend
 from fmplay.profiles import ProfileError, get_profile, list_profiles
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="fmplay",
-        description="Play audio through an fmplay profile.",
-    )
-    parser.add_argument(
-        "--profile",
-        default="passthrough",
-        help="Playback/degradation profile to use. Default: passthrough.",
-    )
-    parser.add_argument("audio_file", type=Path, help="Audio file to play.")
-    return parser
+def _error(message: str) -> None:
+    console = Console(stderr=True)
+    console.print("fmplay: ", Text(message), sep="")
 
 
-def run(
-    argv: Sequence[str] | None = None, backend: PlaybackBackend | None = None
+def _play_audio(
+    audio_file: Path, profile_name: str, backend: PlaybackBackend | None = None
 ) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
-
-    audio_file = args.audio_file.expanduser()
+    audio_file = audio_file.expanduser()
     if not audio_file.exists():
-        parser.exit(1, f"fmplay: file not found: {audio_file}\n")
+        _error(f"file not found: {audio_file}")
+        raise SystemExit(1)
     if not audio_file.is_file():
-        parser.exit(1, f"fmplay: not a file: {audio_file}\n")
+        _error(f"not a file: {audio_file}")
+        raise SystemExit(1)
 
     try:
-        profile = get_profile(args.profile)
+        profile = get_profile(profile_name)
     except KeyError:
         available = ", ".join(list_profiles())
-        parser.exit(
-            2,
-            f"fmplay: unknown profile '{args.profile}'. "
-            f"Available profiles: {available}\n",
-        )
+        _error(f"unknown profile '{profile_name}'. Available profiles: {available}")
+        raise SystemExit(2) from None
 
     try:
         profile.play(audio_file, backend or default_backend())
     except KeyboardInterrupt:
         return 130
     except (PlaybackError, ProfileError) as exc:
-        parser.exit(1, f"fmplay: {exc}\n")
+        _error(str(exc))
+        raise SystemExit(1) from exc
 
     return 0
+
+
+def build_app(backend: PlaybackBackend | None = None) -> typer.Typer:
+    app = typer.Typer(
+        add_completion=False,
+        help="Play audio through an fmplay profile.",
+        rich_markup_mode="rich",
+    )
+
+    @app.command()
+    def play(
+        audio_file: Annotated[Path, typer.Argument(help="Audio file to play.")],
+        profile: Annotated[
+            str,
+            typer.Option(
+                "--profile",
+                help="Playback/degradation profile to use.",
+                show_default=True,
+            ),
+        ] = "passthrough",
+    ) -> int:
+        return _play_audio(audio_file, profile, backend)
+
+    return app
+
+
+def run(
+    argv: Sequence[str] | None = None, backend: PlaybackBackend | None = None
+) -> int:
+    app = build_app(backend)
+    try:
+        result = app(
+            args=list(argv) if argv is not None else None,
+            prog_name="fmplay",
+            standalone_mode=False,
+        )
+    except typer._click.ClickException as exc:
+        exc.show()
+        raise SystemExit(exc.exit_code) from exc
+
+    return int(result or 0)
 
 
 def main(argv: Sequence[str] | None = None) -> None:
