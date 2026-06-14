@@ -66,6 +66,10 @@ Available profiles:
   supports the `libgsm` encoder, the profile round-trips through the actual GSM
   Full Rate codec; otherwise it falls back to narrowband filtering, compression,
   and bit-depth crushing.
+- `libgsm`: Round-trips audio through the native `libgsm` library directly,
+  using `ffmpeg` only to decode, prefilter, resample, and mix the source to
+  8 kHz mono PCM. This profile requires `libgsm` at runtime; if it is missing,
+  only this profile fails.
 - `marine-vhf-1993`: Plays a mono 1990s marine VHF Channel 16-style
   degradation. It streams clean speech through a staged approximation of a
   shipboard push-to-talk microphone, VHF-FM transmitter limiting, receiver

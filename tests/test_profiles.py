@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
+from fmplay.libgsm import LibGsmError
 from fmplay.profiles import (
     FmRadioProfile,
     GsmCodecProfile,
+    LibGsmProfile,
     MarineVhf1993Profile,
     ProfileError,
 )
@@ -155,6 +158,82 @@ def test_gsm_profile_reports_ffmpeg_failures(
 
     with pytest.raises(ProfileError, match="Unsupported input format"):
         GsmCodecProfile().render(audio_file, tmp_path / "gsm.wav")
+
+
+def test_libgsm_profile_round_trips_with_native_libgsm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audio_file = tmp_path / "audio.wav"
+    audio_file.write_bytes(b"source audio")
+    calls: list[tuple[Path, Path, str, str]] = []
+
+    class FakeCodec:
+        def round_trip_file(
+            self,
+            source_path: Path,
+            output_path: Path,
+            *,
+            ffmpeg_command: str,
+            filter_graph: str,
+        ) -> None:
+            calls.append((source_path, output_path, ffmpeg_command, filter_graph))
+            output_path.write_bytes(b"native libgsm output")
+
+    monkeypatch.setattr("fmplay.profiles.NativeLibGsmCodec", FakeCodec)
+    backend = InspectingBackend()
+
+    LibGsmProfile().play(audio_file, backend)
+
+    assert backend.played is not None
+    assert backend.played.name == "libgsm.wav"
+    assert backend.exists_while_playing
+    assert backend.contents == b"native libgsm output"
+    assert calls[0][0] == audio_file
+    assert calls[0][2] == "ffmpeg"
+    assert "highpass=f=260" in calls[0][3]
+
+
+def test_libgsm_profile_streams_with_python_producer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audio_file = tmp_path / "audio.wav"
+    audio_file.write_bytes(b"source audio")
+    availability_checks = 0
+
+    class FakeCodec:
+        @classmethod
+        def ensure_available(cls) -> None:
+            nonlocal availability_checks
+            availability_checks += 1
+
+    monkeypatch.setattr("fmplay.profiles.NativeLibGsmCodec", FakeCodec)
+
+    stream = LibGsmProfile().stream(audio_file)
+
+    assert availability_checks == 1
+    assert stream.input_format == "s16le"
+    assert stream.sample_rate == 8000
+    assert stream.channel_layout == "mono"
+    assert stream.command[:3] == (sys.executable, "-m", "fmplay.libgsm_stream")
+    assert "--filter" in stream.command
+    assert str(audio_file) == stream.command[-1]
+
+
+def test_libgsm_profile_reports_missing_native_library(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audio_file = tmp_path / "audio.wav"
+    audio_file.write_bytes(b"source audio")
+
+    class FakeCodec:
+        @classmethod
+        def ensure_available(cls) -> None:
+            raise LibGsmError("libgsm was not found")
+
+    monkeypatch.setattr("fmplay.profiles.NativeLibGsmCodec", FakeCodec)
+
+    with pytest.raises(ProfileError, match="libgsm was not found"):
+        LibGsmProfile().stream(audio_file)
 
 
 def test_marine_vhf_1993_profile_renders_pipeline(
