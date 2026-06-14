@@ -33,6 +33,7 @@ class Clip:
     text: str
     output_path: Path
     explanation: str
+    speed: float = 0.92
 
 
 CLIPS = {
@@ -49,6 +50,7 @@ CLIPS = {
             "This recipe intentionally renders a clean source take; radio, "
             "microphone, and receiver degradation belongs in fmplay profiles."
         ),
+        speed=0.78,
     ),
     "abandon_ship": Clip(
         text=(
@@ -95,7 +97,7 @@ def render_clip(client: ElevenLabs, clip: Clip, output_path: Path) -> None:
             stability=0.42,
             similarity_boost=0.82,
             style=0.22,
-            speed=0.92,
+            speed=clip.speed,
             use_speaker_boost=True,
         ),
     )
