@@ -210,6 +210,50 @@ class MarineVhf1993Profile:
         )
 
 
+@dataclass(frozen=True)
+class FmRadioProfile:
+    """Play audio through a plain public FM radio broadcast path."""
+
+    name: str = "fmradio"
+    description: str = "Public FM radio degradation tuned near 98.3 MHz."
+    frequency_mhz: float = 98.3
+    ffmpeg_command: str = "ffmpeg"
+
+    def play(self, path: Path, backend: PlaybackBackend) -> None:
+        with tempfile.TemporaryDirectory(prefix="fmplay-fmradio-") as temp_dir:
+            transformed_path = Path(temp_dir) / "fmradio.wav"
+            self.render(path, transformed_path)
+            backend.play(transformed_path)
+
+    def render(self, source_path: Path, output_path: Path) -> None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        _run_ffmpeg(
+            self.ffmpeg_command,
+            self.name,
+            [
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-i",
+                str(source_path),
+                "-vn",
+                "-filter_complex",
+                _fmradio_filter_graph(self.frequency_mhz),
+                "-map",
+                "[out]",
+                "-ar",
+                "44100",
+                "-ac",
+                "2",
+                "-c:a",
+                "pcm_s16le",
+                str(output_path),
+            ],
+            f"rendering public FM radio audio at {self.frequency_mhz:.1f} MHz",
+        )
+
+
 _GSM_PREFILTER = ",".join(
     [
         "highpass=f=260",
@@ -236,6 +280,76 @@ _MARINE_VHF_STATIC_FLUTTER = (
     r"volume='0.78+0.07*sin(13.7*t)+0.04*sin(51*t)+"
     r"if(lt(mod(t+0.07\,0.37)\,0.026)\,0.18\,0)':eval=frame"
 )
+
+
+def _fmradio_filter_graph(frequency_mhz: float) -> str:
+    seed_base = int(round(frequency_mhz * 1000))
+    stages = (
+        _FilterStage(
+            "broadcast processor",
+            ",".join(
+                [
+                    "[0:a]aresample=48000",
+                    "aformat=channel_layouts=stereo",
+                    "highpass=f=45",
+                    "lowpass=f=15000",
+                    "equalizer=f=180:t=q:w=0.9:g=-1.5",
+                    "equalizer=f=3300:t=q:w=1.1:g=1.8",
+                    (
+                        "compand=attacks=0.006:decays=0.18:"
+                        "points=-90/-85|-45/-36|-18/-14|-6/-5|0/-2:"
+                        "soft-knee=3:gain=1.5"
+                    ),
+                    "alimiter=limit=0.93",
+                    r"volume='0.98+0.018*sin(1.7*t)+0.01*sin(6.1*t)':eval=frame",
+                    "tremolo=f=0.32:d=0.012",
+                ]
+            )
+            + "[program]",
+        ),
+        _FilterStage(
+            f"{frequency_mhz:.1f} MHz receiver hiss",
+            ",".join(
+                [
+                    f"anoisesrc=r=48000:a=0.0045:c=white:s={seed_base + 1}",
+                    "highpass=f=6800",
+                    "lowpass=f=17000",
+                ]
+            )
+            + "[hiss]",
+        ),
+        _FilterStage(
+            "quiet tuner bed",
+            ",".join(
+                [
+                    f"anoisesrc=r=48000:a=0.0014:c=pink:s={seed_base + 2}",
+                    "lowpass=f=180",
+                ]
+            )
+            + "[bed]",
+        ),
+        _FilterStage(
+            "stereo pilot leakage",
+            ",".join(["sine=f=19000:r=48000", "volume=0.0016"]) + "[pilot]",
+        ),
+        _FilterStage(
+            "receiver speaker output",
+            ",".join(
+                [
+                    (
+                        "[program][hiss][bed][pilot]amix=inputs=4:duration=first:"
+                        "weights='1 0.9 0.45 0.35':normalize=0"
+                    ),
+                    "lowpass=f=16500",
+                    "alimiter=limit=0.95",
+                    "volume=0.92",
+                ]
+            )
+            + "[out]",
+        ),
+    )
+
+    return ";".join(stage.graph for stage in stages)
 
 
 def _marine_vhf_receiver_static_graph(
@@ -517,6 +631,7 @@ def _format_subprocess_details(exc: subprocess.CalledProcessError) -> str:
 
 
 _PROFILES: dict[str, Profile] = {
+    FmRadioProfile.name: FmRadioProfile(),
     GsmCodecProfile.name: GsmCodecProfile(),
     MarineVhf1993Profile.name: MarineVhf1993Profile(),
     PassthroughProfile.name: PassthroughProfile(),
