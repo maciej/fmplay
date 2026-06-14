@@ -47,6 +47,8 @@ def run(
 
     try:
         profile.play(audio_file, backend or default_backend())
+    except KeyboardInterrupt:
+        return 130
     except (PlaybackError, ProfileError) as exc:
         parser.exit(1, f"fmplay: {exc}\n")
 
