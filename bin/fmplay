@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+
+target=$0
+
+while [ -L "$target" ]; do
+    link=$(readlink "$target")
+    case $link in
+        /*) target=$link ;;
+        *) target=$(dirname "$target")/$link ;;
+    esac
+done
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$target")" && pwd)
+cd "$script_dir/.."
+exec uv run fmplay "$@"
