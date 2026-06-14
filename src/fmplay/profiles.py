@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from fmplay.backends import PlaybackBackend
+from fmplay.backends import AudioStream, PlaybackBackend
 
 
 class ProfileError(RuntimeError):
@@ -82,31 +82,35 @@ class GsmCodecProfile:
 
         self._render_narrowband_fallback(source_path, output_path)
 
+    def stream(self, source_path: Path) -> AudioStream | None:
+        if self._encoder_available("libgsm"):
+            return AudioStream(
+                command=tuple(
+                    [
+                        self.ffmpeg_command,
+                        *self._libgsm_encode_args(source_path, "pipe:1"),
+                    ]
+                ),
+                input_format="gsm",
+                sample_rate=8000,
+            )
+
+        return AudioStream(
+            command=tuple(
+                [
+                    self.ffmpeg_command,
+                    *self._narrowband_fallback_args(source_path, "pipe:1"),
+                ]
+            ),
+            input_format="s16le",
+            sample_rate=8000,
+            channel_layout="mono",
+        )
+
     def _render_with_libgsm(self, source_path: Path, output_path: Path) -> None:
         gsm_path = output_path.with_suffix(".gsm")
         self._run_ffmpeg(
-            [
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-y",
-                "-i",
-                str(source_path),
-                "-vn",
-                "-map",
-                "0:a:0",
-                "-af",
-                _GSM_PREFILTER,
-                "-ar",
-                "8000",
-                "-ac",
-                "1",
-                "-c:a",
-                "libgsm",
-                "-f",
-                "gsm",
-                str(gsm_path),
-            ],
+            self._libgsm_encode_args(source_path, str(gsm_path)),
             "encoding audio with libgsm",
         )
         self._run_ffmpeg(
@@ -131,30 +135,60 @@ class GsmCodecProfile:
             "decoding libgsm audio",
         )
 
+    def _libgsm_encode_args(self, source_path: Path, output: str) -> list[str]:
+        return [
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(source_path),
+            "-vn",
+            "-map",
+            "0:a:0",
+            "-af",
+            _GSM_PREFILTER,
+            "-ar",
+            "8000",
+            "-ac",
+            "1",
+            "-c:a",
+            "libgsm",
+            "-f",
+            "gsm",
+            output,
+        ]
+
     def _render_narrowband_fallback(self, source_path: Path, output_path: Path) -> None:
         self._run_ffmpeg(
-            [
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-y",
-                "-i",
-                str(source_path),
-                "-vn",
-                "-map",
-                "0:a:0",
-                "-af",
-                _GSM_FALLBACK_FILTER,
-                "-ar",
-                "8000",
-                "-ac",
-                "1",
-                "-c:a",
-                "pcm_s16le",
-                str(output_path),
-            ],
+            self._narrowband_fallback_args(source_path, str(output_path)),
             "rendering narrowband GSM-style audio",
         )
+
+    def _narrowband_fallback_args(self, source_path: Path, output: str) -> list[str]:
+        args = [
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(source_path),
+            "-vn",
+            "-map",
+            "0:a:0",
+            "-af",
+            _GSM_FALLBACK_FILTER,
+            "-ar",
+            "8000",
+            "-ac",
+            "1",
+            "-c:a",
+            "pcm_s16le",
+        ]
+        if output == "pipe:1":
+            args.extend(["-f", "s16le"])
+        args.append(output)
+        return args
 
     def _encoder_available(self, encoder_name: str) -> bool:
         try:
@@ -203,27 +237,21 @@ class MarineVhf1993Profile:
         _run_ffmpeg(
             self.ffmpeg_command,
             self.name,
-            [
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-y",
-                "-i",
-                str(source_path),
-                "-vn",
-                "-filter_complex",
-                _marine_vhf_1993_filter_graph(),
-                "-map",
-                "[out]",
-                "-ar",
-                "24000",
-                "-ac",
-                "1",
-                "-c:a",
-                "pcm_s16le",
-                str(output_path),
-            ],
+            self._render_args(source_path, str(output_path)),
             "rendering 1993 marine VHF Channel 16 audio",
+        )
+
+    def stream(self, source_path: Path) -> AudioStream:
+        return AudioStream(
+            command=tuple(
+                [
+                    self.ffmpeg_command,
+                    *self._render_args(source_path, "pipe:1"),
+                ]
+            ),
+            input_format="s16le",
+            sample_rate=24000,
+            channel_layout="mono",
         )
 
     def profile_info(self) -> ProfileInfo:
@@ -232,6 +260,31 @@ class MarineVhf1993Profile:
             description=self.description,
             primitives=_profile_primitives(_MARINE_VHF_1993_STAGES),
         )
+
+    def _render_args(self, source_path: Path, output: str) -> list[str]:
+        args = [
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(source_path),
+            "-vn",
+            "-filter_complex",
+            _marine_vhf_1993_filter_graph(),
+            "-map",
+            "[out]",
+            "-ar",
+            "24000",
+            "-ac",
+            "1",
+            "-c:a",
+            "pcm_s16le",
+        ]
+        if output == "pipe:1":
+            args.extend(["-f", "s16le"])
+        args.append(output)
+        return args
 
 
 @dataclass(frozen=True)
@@ -254,27 +307,21 @@ class FmRadioProfile:
         _run_ffmpeg(
             self.ffmpeg_command,
             self.name,
-            [
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-y",
-                "-i",
-                str(source_path),
-                "-vn",
-                "-filter_complex",
-                _fmradio_filter_graph(self.frequency_mhz),
-                "-map",
-                "[out]",
-                "-ar",
-                "44100",
-                "-ac",
-                "2",
-                "-c:a",
-                "pcm_s16le",
-                str(output_path),
-            ],
+            self._render_args(source_path, str(output_path)),
             f"rendering public FM radio audio at {self.frequency_mhz:.1f} MHz",
+        )
+
+    def stream(self, source_path: Path) -> AudioStream:
+        return AudioStream(
+            command=tuple(
+                [
+                    self.ffmpeg_command,
+                    *self._render_args(source_path, "pipe:1"),
+                ]
+            ),
+            input_format="s16le",
+            sample_rate=44100,
+            channel_layout="stereo",
         )
 
     def profile_info(self) -> ProfileInfo:
@@ -283,6 +330,31 @@ class FmRadioProfile:
             description=self.description,
             primitives=_profile_primitives(_fmradio_filter_stages(self.frequency_mhz)),
         )
+
+    def _render_args(self, source_path: Path, output: str) -> list[str]:
+        args = [
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(source_path),
+            "-vn",
+            "-filter_complex",
+            _fmradio_filter_graph(self.frequency_mhz),
+            "-map",
+            "[out]",
+            "-ar",
+            "44100",
+            "-ac",
+            "2",
+            "-c:a",
+            "pcm_s16le",
+        ]
+        if output == "pipe:1":
+            args.extend(["-f", "s16le"])
+        args.append(output)
+        return args
 
 
 _GSM_PREFILTER = ",".join(

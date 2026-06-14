@@ -101,6 +101,36 @@ def test_gsm_profile_uses_narrowband_fallback_without_libgsm(
     assert "acrusher=bits=8" in fallback_command[fallback_command.index("-af") + 1]
 
 
+def test_gsm_profile_streams_libgsm_when_available(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audio_file = tmp_path / "audio.wav"
+    audio_file.write_bytes(b"source audio")
+
+    def fake_run(
+        command: list[str],
+        *,
+        check: bool,
+        capture_output: bool,
+        text: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        assert "-encoders" in command
+        return subprocess.CompletedProcess(
+            command, 0, stdout=" A..... libgsm              libgsm GSM\n"
+        )
+
+    monkeypatch.setattr("fmplay.profiles.subprocess.run", fake_run)
+
+    stream = GsmCodecProfile().stream(audio_file)
+
+    assert stream.input_format == "gsm"
+    assert stream.sample_rate == 8000
+    assert stream.channel_layout is None
+    assert "libgsm" in stream.command
+    assert stream.command[stream.command.index("-f") + 1] == "gsm"
+    assert stream.command[-1] == "pipe:1"
+
+
 def test_gsm_profile_reports_ffmpeg_failures(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from fmplay.backends import AudioStream
 from fmplay.cli import run
 
 
@@ -16,6 +17,17 @@ class FakeBackend:
 
     def play(self, path: Path) -> None:
         self.played.append(path)
+
+
+class StreamingFakeBackend(FakeBackend):
+    name = "streaming-fake"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.streamed: list[AudioStream] = []
+
+    def play_stream(self, stream: AudioStream) -> None:
+        self.streamed.append(stream)
 
 
 class InterruptingBackend:
@@ -86,6 +98,59 @@ def test_no_play_still_renders_profile(
 
     assert backend.played == []
     assert len(calls) == 1
+
+
+def test_streaming_backend_streams_profile_by_default(tmp_path: Path) -> None:
+    audio_file = tmp_path / "audio.wav"
+    audio_file.write_bytes(b"source audio")
+    backend = StreamingFakeBackend()
+
+    assert run(["--profile", "fmradio", str(audio_file)], backend=backend) == 0
+
+    assert backend.played == []
+    assert len(backend.streamed) == 1
+    stream = backend.streamed[0]
+    assert stream.input_format == "s16le"
+    assert stream.sample_rate == 44100
+    assert stream.channel_layout == "stereo"
+    assert stream.command[stream.command.index("-f") + 1] == "s16le"
+    assert stream.command[-1] == "pipe:1"
+
+
+def test_spectrogram_renders_before_playing_with_streaming_backend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audio_file = tmp_path / "audio.wav"
+    audio_file.write_bytes(b"source audio")
+    backend = StreamingFakeBackend()
+    rendered_audio_paths: list[Path] = []
+
+    def fake_run(
+        command: list[str],
+        *,
+        check: bool,
+        capture_output: bool,
+        text: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        Path(command[-1]).write_bytes(b"marine vhf output")
+        return subprocess.CompletedProcess(command, 0, stdout="")
+
+    def fake_render_spectrogram(audio_path: Path, output_path: Path) -> None:
+        rendered_audio_paths.append(audio_path)
+        output_path.write_bytes(b"png")
+
+    monkeypatch.setattr("fmplay.profiles.subprocess.run", fake_run)
+    monkeypatch.setattr("fmplay.cli.render_spectrogram_image", fake_render_spectrogram)
+    monkeypatch.setattr("fmplay.cli.print_kitty_image", lambda path: None)
+
+    assert (
+        run(["--profile", "marine-vhf-1993", "--spectrogram", str(audio_file)], backend)
+        == 0
+    )
+
+    assert backend.streamed == []
+    assert backend.played[0].name == "marine-vhf-1993.wav"
+    assert rendered_audio_paths == backend.played
 
 
 def test_profile_primitives_are_printed(
