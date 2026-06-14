@@ -14,6 +14,7 @@ from rich.text import Text
 from fmplay.backends import PlaybackBackend, PlaybackError, default_backend
 from fmplay.profiles import (
     ProfileError,
+    ProfileInfo,
     get_profile,
     list_profile_summaries,
     list_profiles,
@@ -59,6 +60,8 @@ def _play_audio(
     try:
         with tempfile.TemporaryDirectory(prefix="fmplay-") as temp_dir:
             prepared_audio = _prepare_profile_audio(profile, audio_file, Path(temp_dir))
+            if not _spectrogram_prints_to_console(spectrogram, spectrogram_file):
+                _print_profile_info(profile, audio_file)
             if spectrogram or spectrogram_file is not None:
                 spectrogram_path = (
                     spectrogram_file or Path(temp_dir) / "spectrogram.png"
@@ -87,6 +90,45 @@ def _prepare_profile_audio(profile: object, audio_file: Path, temp_dir: Path) ->
         return transformed_path
 
     return audio_file
+
+
+def _spectrogram_prints_to_console(
+    spectrogram: bool, spectrogram_file: Path | None
+) -> bool:
+    return spectrogram and spectrogram_file is None
+
+
+def _print_profile_info(profile: object, audio_file: Path) -> None:
+    profile_info = _get_profile_info(profile)
+    if profile_info is None or not profile_info.primitives:
+        return
+
+    console = Console()
+    console.print(Text(f"{profile_info.name} profile", style="bold"))
+    console.print(Text(profile_info.description))
+    console.print(Text(f"Source: {audio_file}", style="dim"))
+
+    table = Table(
+        "Primitive",
+        "ffmpeg graph",
+        title="Applied transformations",
+        show_lines=True,
+    )
+    for primitive in profile_info.primitives:
+        table.add_row(
+            Text(primitive.name, style="bold"),
+            Text(primitive.graph, style="dim", overflow="fold"),
+        )
+
+    console.print(table)
+
+
+def _get_profile_info(profile: object) -> ProfileInfo | None:
+    describe = getattr(profile, "profile_info", None)
+    if not callable(describe):
+        return None
+
+    return describe()
 
 
 def _print_profiles() -> None:

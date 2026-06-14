@@ -32,6 +32,23 @@ class ProfileSummary:
 
 
 @dataclass(frozen=True)
+class ProfilePrimitive:
+    """A data-backed primitive used by a profile render pipeline."""
+
+    name: str
+    graph: str
+
+
+@dataclass(frozen=True)
+class ProfileInfo:
+    """Structured display metadata for a profile render pipeline."""
+
+    name: str
+    description: str
+    primitives: tuple[ProfilePrimitive, ...]
+
+
+@dataclass(frozen=True)
 class PassthroughProfile:
     """Play the original audio file without transformation."""
 
@@ -209,6 +226,13 @@ class MarineVhf1993Profile:
             "rendering 1993 marine VHF Channel 16 audio",
         )
 
+    def profile_info(self) -> ProfileInfo:
+        return ProfileInfo(
+            name=self.name,
+            description=self.description,
+            primitives=_profile_primitives(_MARINE_VHF_1993_STAGES),
+        )
+
 
 @dataclass(frozen=True)
 class FmRadioProfile:
@@ -253,6 +277,13 @@ class FmRadioProfile:
             f"rendering public FM radio audio at {self.frequency_mhz:.1f} MHz",
         )
 
+    def profile_info(self) -> ProfileInfo:
+        return ProfileInfo(
+            name=self.name,
+            description=self.description,
+            primitives=_profile_primitives(_fmradio_filter_stages(self.frequency_mhz)),
+        )
+
 
 _GSM_PREFILTER = ",".join(
     [
@@ -276,15 +307,23 @@ class _FilterStage:
     graph: str
 
 
+def _profile_primitives(
+    stages: tuple[_FilterStage, ...],
+) -> tuple[ProfilePrimitive, ...]:
+    return tuple(
+        ProfilePrimitive(name=stage.name, graph=stage.graph) for stage in stages
+    )
+
+
 _MARINE_VHF_STATIC_FLUTTER = (
     r"volume='0.78+0.07*sin(13.7*t)+0.04*sin(51*t)+"
     r"if(lt(mod(t+0.07\,0.37)\,0.026)\,0.18\,0)':eval=frame"
 )
 
 
-def _fmradio_filter_graph(frequency_mhz: float) -> str:
+def _fmradio_filter_stages(frequency_mhz: float) -> tuple[_FilterStage, ...]:
     seed_base = int(round(frequency_mhz * 1000))
-    stages = (
+    return (
         _FilterStage(
             "broadcast processor",
             ",".join(
@@ -349,6 +388,9 @@ def _fmradio_filter_graph(frequency_mhz: float) -> str:
         ),
     )
 
+
+def _fmradio_filter_graph(frequency_mhz: float) -> str:
+    stages = _fmradio_filter_stages(frequency_mhz)
     return ";".join(stage.graph for stage in stages)
 
 
