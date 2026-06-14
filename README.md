@@ -40,5 +40,26 @@ Use:
 - `uv` for Python environment, dependency, and command management.
 - `ruff` for linting and formatting.
 
-Concrete setup, test, lint, and usage commands will be added once the package
-layout and first implementation pass are in place.
+Set up the project:
+
+```sh
+uv sync
+```
+
+Run the CLI from the workspace:
+
+```sh
+uv run fmplay --profile passthrough audio.wav
+```
+
+The initial `passthrough` profile plays the source file without applying any
+degradation. On macOS it uses the system `afplay` command. On other platforms it
+will use `ffplay` when available.
+
+Run checks:
+
+```sh
+uv run ruff format --check .
+uv run ruff check .
+uv run pytest
+```
