@@ -432,7 +432,14 @@ def test_preview_regular_profile_streams_generated_source(
     assert any(command_part.endswith("source.wav") for command_part in stream.command)
 
 
-def test_preview_rejects_unknown_target(capsys: pytest.CaptureFixture[str]) -> None:
+def test_preview_rejects_unknown_target_before_resolving_backend(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "fmplay.cli.default_backend",
+        lambda: pytest.fail("invalid targets should not resolve playback"),
+    )
+
     with pytest.raises(SystemExit) as excinfo:
         run(["preview", "cockpit:boeing"])
 

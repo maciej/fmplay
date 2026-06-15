@@ -126,6 +126,19 @@ def _preview_audio(
     except KeyError:
         stage = None
 
+    if stage is None:
+        try:
+            profile = get_profile(target_name)
+        except KeyError:
+            available = ", ".join((*list_profiles(), *list_stages()))
+            _error(
+                f"unknown preview target '{target_name}'. "
+                f"Available preview targets: {available}"
+            )
+            raise SystemExit(2) from None
+    else:
+        profile = None
+
     preview_seed = (
         seed if seed is not None else random.SystemRandom().randrange(1, 2**31)
     )
@@ -154,16 +167,6 @@ def _preview_audio(
                 )
                 playback_backend.play(rendered_path)
             return 0
-
-        try:
-            profile = get_profile(target_name)
-        except KeyError:
-            available = ", ".join((*list_profiles(), *list_stages()))
-            _error(
-                f"unknown preview target '{target_name}'. "
-                f"Available preview targets: {available}"
-            )
-            raise SystemExit(2) from None
 
         with tempfile.TemporaryDirectory(prefix="fmplay-preview-") as temp_dir:
             source_path = Path(temp_dir) / "source.wav"
