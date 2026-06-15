@@ -91,6 +91,17 @@ Preview a profile or reusable profile stage using generated audio:
 uv run fmplay preview fmradio --source white --duration 10
 ```
 
+Generate shell completion scripts:
+
+```sh
+uv run fmplay completion bash
+uv run fmplay completion fish
+uv run fmplay completion zsh
+```
+
+The generated completions include profile names for `--profile` and both
+profiles and reusable profile stages for `preview`.
+
 Reusable profile stages are findable by `preview` but are not listed as normal
 profiles. The `cockpit:a320` stage synthesizes an Airbus A320 cockpit ambient
 bed with seeded ECS/pack roar, windshield boundary-layer flow, avionics fan

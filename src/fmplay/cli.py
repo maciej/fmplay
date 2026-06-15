@@ -7,9 +7,10 @@ import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, cast
+from typing import Annotated, Literal, cast
 
 import typer
+import typer.completion
 from rich.console import Console
 from rich.table import Table
 from rich.text import Text
@@ -33,11 +34,15 @@ from fmplay.stages import (
     GeneratedSource,
     get_stage,
     is_generated_source,
+    list_generated_sources,
+    list_squelch_event_kinds,
     list_stages,
     render_generated_source,
 )
 
-_COMMANDS = frozenset({"play", "preview", "profiles"})
+_COMMANDS = frozenset({"completion", "play", "preview", "profiles"})
+_COMPLETION_OPTIONS = frozenset({"--install-completion", "--show-completion"})
+_COMPLETION_SHELLS = ("bash", "fish", "zsh")
 
 
 @dataclass(frozen=True)
@@ -499,12 +504,57 @@ def _print_preview_info(
     console.print(table)
 
 
+def _filter_completion_values(values: Sequence[str], incomplete: str) -> list[str]:
+    return [value for value in values if value.startswith(incomplete)]
+
+
+def _complete_profile(incomplete: str) -> list[str]:
+    return _filter_completion_values(list_profiles(), incomplete)
+
+
+def _complete_preview_target(incomplete: str) -> list[str]:
+    return _filter_completion_values((*list_profiles(), *list_stages()), incomplete)
+
+
+def _complete_generated_source(incomplete: str) -> list[str]:
+    return _filter_completion_values(list_generated_sources(), incomplete)
+
+
+def _complete_squelch_event(incomplete: str) -> list[str]:
+    return _filter_completion_values(list_squelch_event_kinds(), incomplete)
+
+
+def _print_completion(shell: str) -> None:
+    complete_var = "_FMPLAY_COMPLETE"
+    typer.echo(
+        typer.completion.get_completion_script(
+            prog_name="fmplay",
+            complete_var=complete_var,
+            shell=shell,
+        )
+    )
+
+
 def build_app(backend: PlaybackBackend | None = None) -> typer.Typer:
     app = typer.Typer(
-        add_completion=False,
+        add_completion=True,
         help="Play audio through an fmplay profile.",
         rich_markup_mode="rich",
     )
+
+    @app.callback()
+    def root(
+        profile: Annotated[
+            str,
+            typer.Option(
+                "--profile",
+                help="Playback/degradation profile to use with shorthand playback.",
+                show_default=True,
+                autocompletion=_complete_profile,
+            ),
+        ] = "passthrough",
+    ) -> None:
+        pass
 
     @app.command()
     def play(
@@ -515,6 +565,7 @@ def build_app(backend: PlaybackBackend | None = None) -> typer.Typer:
                 "--profile",
                 help="Playback/degradation profile to use.",
                 show_default=True,
+                autocompletion=_complete_profile,
             ),
         ] = "passthrough",
         no_play: Annotated[
@@ -558,7 +609,8 @@ def build_app(backend: PlaybackBackend | None = None) -> typer.Typer:
             typer.Argument(
                 help=(
                     "Profile or profile stage to preview, for example 'cockpit:a320'."
-                )
+                ),
+                autocompletion=_complete_preview_target,
             ),
         ],
         duration: Annotated[
@@ -578,6 +630,7 @@ def build_app(backend: PlaybackBackend | None = None) -> typer.Typer:
                     "Generated source to preview against: silence, white, pink, brown."
                 ),
                 show_default=True,
+                autocompletion=_complete_generated_source,
             ),
         ] = "silence",
         seed: Annotated[
@@ -616,6 +669,7 @@ def build_app(backend: PlaybackBackend | None = None) -> typer.Typer:
                     "threshold_chatter, carrier_snap, thin_gate_flutter."
                 ),
                 show_default=False,
+                autocompletion=_complete_squelch_event,
             ),
         ] = None,
         squelch_start: Annotated[
@@ -693,6 +747,24 @@ def build_app(backend: PlaybackBackend | None = None) -> typer.Typer:
         _print_profiles()
         return 0
 
+    @app.command()
+    def completion(
+        shell: Annotated[
+            Literal["bash", "fish", "zsh"],
+            typer.Argument(
+                help="Shell completion script to generate.",
+                autocompletion=lambda incomplete: _filter_completion_values(
+                    _COMPLETION_SHELLS,
+                    incomplete,
+                ),
+            ),
+        ],
+    ) -> int:
+        """Generate a shell completion script."""
+
+        _print_completion(shell)
+        return 0
+
     return app
 
 
@@ -702,6 +774,10 @@ def _normalize_argv(argv: Sequence[str] | None) -> list[str] | None:
 
     args = _normalize_spectrogram_args(argv)
     if not args or args[0] in _COMMANDS or args[0] in {"--help", "-h"}:
+        return args
+    if args[0] in _COMPLETION_OPTIONS or any(
+        args[0].startswith(f"{option}=") for option in _COMPLETION_OPTIONS
+    ):
         return args
 
     return ["play", *args]

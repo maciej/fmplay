@@ -462,6 +462,14 @@ def list_stages() -> tuple[str, ...]:
     return tuple(sorted(_STAGES))
 
 
+def list_generated_sources() -> tuple[str, ...]:
+    return tuple(sorted(_SOURCE_KINDS))
+
+
+def list_squelch_event_kinds() -> tuple[str, ...]:
+    return _SQUELCH_EVENT_KINDS
+
+
 def is_generated_source(value: str) -> bool:
     return value in _SOURCE_KINDS
 
