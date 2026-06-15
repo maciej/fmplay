@@ -413,7 +413,7 @@ def _print_profile_info(profile: object, audio_file: Path) -> None:
 
     table = Table(
         "Primitive",
-        "ffmpeg graph",
+        "implementation",
         title="Applied transformations",
         show_lines=True,
     )

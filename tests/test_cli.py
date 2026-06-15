@@ -183,6 +183,37 @@ def test_profile_primitives_are_printed(
     assert "highpass=f=45" in output
 
 
+def test_reused_stage_primitives_print_builtin_options(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audio_file = tmp_path / "audio.wav"
+    audio_file.write_bytes(b"source audio")
+
+    def fake_run(
+        command: list[str],
+        *,
+        check: bool,
+        capture_output: bool,
+        text: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        Path(command[-1]).write_bytes(b"marine vhf output")
+        return subprocess.CompletedProcess(command, 0, stdout="")
+
+    monkeypatch.setattr("fmplay.profiles.subprocess.run", fake_run)
+    monkeypatch.setenv("COLUMNS", "220")
+
+    assert run(["--profile", "marine-vhf-1993", "--no-play", str(audio_file)]) == 0
+
+    output = capsys.readouterr().out
+    assert "squelch opening spit" in output
+    assert "radio:squelch --squelch-event opening_spit --randomness normal" in output
+    assert "radio:squelch --squelch-event tail_crash --randomness normal" in output
+    assert "open_raw" not in output
+    assert "tail_raw" not in output
+
+
 def test_spectrogram_uses_passthrough_audio(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
