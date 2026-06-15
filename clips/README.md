@@ -6,10 +6,13 @@ This directory stores reproducible audio clips.
 - `audio/` contains generated audio files and is intentionally ignored by git.
 - `audio/.gitkeep` is tracked so the output directory exists in fresh clones.
 
-Copy `.env.example` to `.env`, set `ELEVENLABS_API_KEY`, then run a recipe:
+Copy `.env.example` to `.env`, set `ELEVENLABS_API_KEY`, then run every
+recipe:
 
 ```sh
-./clips/recipes/*.py
+for recipe in ./clips/recipes/*.py; do
+  "$recipe"
+done
 ```
 
 The Jan Heweliusz recipe currently writes:
