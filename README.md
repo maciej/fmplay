@@ -106,6 +106,18 @@ See [docs/cockpit-audio-simulation.md](docs/cockpit-audio-simulation.md) for
 the model notes, tuning caveats, and references to keep for future cockpit
 audio work.
 
+The `radio:squelch` stage synthesizes a randomized library of receiver squelch
+opens, tail crashes, carrier snaps, and weak-signal chatter for future ATC or
+radio scenes:
+
+```sh
+uv run fmplay preview radio:squelch --duration 20
+uv run fmplay preview radio:squelch --seed 42 --duration 20
+```
+
+See [docs/squelch-sound-library.md](docs/squelch-sound-library.md) for the
+model notes, Hugging Face reference workflow, and validation tooling.
+
 Draw a terminal spectrogram in a Kitty graphics protocol terminal such as
 Ghostty. Spectrograms are rendered from a profiled temporary file before
 playback:
