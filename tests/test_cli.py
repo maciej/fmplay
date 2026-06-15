@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -379,6 +381,67 @@ def test_profiles_subcommand_lists_available_profiles(
     assert "cockpit:a320" not in output
 
 
+def test_completion_subcommand_generates_supported_shell_scripts(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    for shell in ("bash", "fish", "zsh"):
+        assert run(["completion", shell], backend=FakeBackend()) == 0
+        output = capsys.readouterr().out
+        assert "_FMPLAY_COMPLETE" in output
+        assert "fmplay" in output
+
+
+def test_bash_completion_completes_shorthand_profiles() -> None:
+    output = _run_completion_probe(
+        {
+            "_FMPLAY_COMPLETE": "complete_bash",
+            "COMP_WORDS": "fmplay --profile ",
+            "COMP_CWORD": "2",
+        }
+    )
+
+    assert "passthrough" in output.splitlines()
+    assert "marine-vhf-1993" in output.splitlines()
+
+
+def test_bash_completion_completes_preview_targets() -> None:
+    output = _run_completion_probe(
+        {
+            "_FMPLAY_COMPLETE": "complete_bash",
+            "COMP_WORDS": "fmplay preview ",
+            "COMP_CWORD": "2",
+        }
+    )
+
+    completions = output.splitlines()
+    assert "fmradio" in completions
+    assert "cockpit:a320" in completions
+    assert "radio:squelch" in completions
+
+
+def test_zsh_completion_escapes_preview_stage_colons() -> None:
+    output = _run_completion_probe(
+        {
+            "_FMPLAY_COMPLETE": "complete_zsh",
+            "_TYPER_COMPLETE_ARGS": "fmplay preview cockpit:",
+        }
+    )
+
+    assert '"cockpit\\\\:a320"' in output
+
+
+def test_fish_completion_completes_preview_stage_colons() -> None:
+    output = _run_completion_probe(
+        {
+            "_FMPLAY_COMPLETE": "complete_fish",
+            "_TYPER_COMPLETE_FISH_ACTION": "get-args",
+            "_TYPER_COMPLETE_ARGS": "fmplay preview radio:",
+        }
+    )
+
+    assert output.splitlines() == ["radio:squelch"]
+
+
 def test_preview_a320_cockpit_stage_streams_with_seed(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -708,3 +771,14 @@ def test_profile_error_exits_with_message(
 
     assert exc_info.value.code == 1
     assert "ffmpeg was not found" in capsys.readouterr().err
+
+
+def _run_completion_probe(env: dict[str, str]) -> str:
+    result = subprocess.run(
+        [sys.executable, "-m", "fmplay.cli"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env={**os.environ, **env},
+    )
+    return result.stdout
