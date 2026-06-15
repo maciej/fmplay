@@ -115,17 +115,6 @@ uv run fmplay preview radio:squelch --duration 20
 uv run fmplay preview radio:squelch --seed 42 --duration 20
 ```
 
-Render the quiet in-speech gate-flutter family tuned against
-`jlvdoorn/atco2-asr-atcosim` `train[6]`:
-
-```sh
-uv run fmplay preview radio:squelch --duration 7.744 --seed 6 \
-  --squelch-event thin_gate_flutter --squelch-start 4.15 \
-  --squelch-duration 0.30 --squelch-level-db -40 \
-  --squelch-highpass 1900 --squelch-lowpass 7600 \
-  --squelch-sample-rate 16000 --output thin_gate_flutter.wav --no-play
-```
-
 See [docs/squelch-sound-library.md](docs/squelch-sound-library.md) for the
 model notes, Hugging Face reference workflow, and validation tooling.
 
