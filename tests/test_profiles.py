@@ -10,6 +10,7 @@ import pytest
 import fmplay.profiles as profiles
 from fmplay.libgsm import LibGsmError
 from fmplay.profiles import (
+    AtcCloseMicProfile,
     FmRadioProfile,
     GsmCodecProfile,
     LibGsmProfile,
@@ -238,12 +239,117 @@ def test_libgsm_profile_reports_missing_native_library(
         LibGsmProfile().stream(audio_file)
 
 
+def test_atc_close_mic_profile_renders_voice_only_pipeline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audio_file = tmp_path / "audio.wav"
+    audio_file.write_bytes(b"source audio")
+    calls: list[tuple[Path, Path, int, str, str]] = []
+
+    def fake_render_file(
+        source_path: Path,
+        output_path: Path,
+        *,
+        seed: int,
+        intensity: str,
+        ffmpeg_command: str,
+    ) -> None:
+        calls.append((source_path, output_path, seed, intensity, ffmpeg_command))
+        output_path.write_bytes(b"atc close mic output")
+
+    monkeypatch.setattr("fmplay.profiles.render_file", fake_render_file)
+    backend = InspectingBackend()
+
+    AtcCloseMicProfile(seed=42, intensity="hot").play(audio_file, backend)
+
+    assert backend.played is not None
+    assert backend.played.name == "atc-close-mic.wav"
+    assert backend.exists_while_playing
+    assert backend.contents == b"atc close mic output"
+    assert calls == [
+        (
+            audio_file,
+            backend.played,
+            42,
+            "hot",
+            "ffmpeg",
+        )
+    ]
+
+
+def test_atc_close_mic_profile_streams_processor_module() -> None:
+    audio_file = Path("source.wav")
+
+    stream = AtcCloseMicProfile(seed=99, intensity="abusive").stream(audio_file)
+
+    assert stream.input_format == "s16le"
+    assert stream.sample_rate == 16000
+    assert stream.channel_layout == "mono"
+    assert stream.command[:3] == (sys.executable, "-m", "fmplay.close_mic")
+    assert stream.command[stream.command.index("--seed") + 1] == "99"
+    assert stream.command[stream.command.index("--intensity") + 1] == "abusive"
+    assert stream.command[-1] == str(audio_file)
+
+
+def test_atc_close_mic_profile_info_exposes_voice_stage() -> None:
+    profile_info = AtcCloseMicProfile().profile_info()
+    primitives = {
+        primitive.name: primitive.graph for primitive in profile_info.primitives
+    }
+
+    assert profile_info.name == "atc-close-mic"
+    assert "seeded technique state" in primitives
+    assert "onset detector" in primitives
+    assert "synthetic plosives and close-mouth events" in primitives
+    assert "event-conditioned overload" in primitives
+    assert "ATC receiver passband" in primitives
+    assert "anoisesrc" not in ";".join(primitives.values())
+
+
+def test_atc_close_mic_profile_reports_processor_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audio_file = tmp_path / "audio.wav"
+    audio_file.write_bytes(b"source audio")
+
+    def fake_render_file(*args: object, **kwargs: object) -> None:
+        from fmplay.close_mic import CloseMicError
+
+        raise CloseMicError("decode failed")
+
+    monkeypatch.setattr("fmplay.profiles.render_file", fake_render_file)
+
+    with pytest.raises(ProfileError, match="decode failed"):
+        AtcCloseMicProfile(seed=42).render(audio_file, tmp_path / "out.wav")
+
+
+def test_atc_close_mic_profile_variants_are_registered() -> None:
+    profile = profiles.get_profile("atc-close-mic:abusive")
+
+    assert isinstance(profile, AtcCloseMicProfile)
+    assert profile.name == "atc-close-mic:abusive"
+    assert profile.intensity == "abusive"
+    assert "atc-close-mic:hot" in profiles.list_profiles()
+
+
 def test_marine_vhf_1993_profile_renders_pipeline(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     audio_file = tmp_path / "audio.wav"
     audio_file.write_bytes(b"source audio")
     calls: list[list[str]] = []
+    close_mic_calls: list[tuple[Path, int, str]] = []
+
+    def fake_render_file(
+        source_path: Path,
+        output_path: Path,
+        *,
+        seed: int,
+        intensity: str,
+        ffmpeg_command: str,
+    ) -> None:
+        close_mic_calls.append((source_path, seed, intensity))
+        output_path.write_bytes(b"close mic voice")
 
     def fake_run(
         command: list[str],
@@ -256,22 +362,30 @@ def test_marine_vhf_1993_profile_renders_pipeline(
         Path(command[-1]).write_bytes(b"marine vhf output")
         return subprocess.CompletedProcess(command, 0, stdout="")
 
+    monkeypatch.setattr("fmplay.profiles.render_file", fake_render_file)
     monkeypatch.setattr("fmplay.profiles.subprocess.run", fake_run)
     backend = InspectingBackend()
 
-    MarineVhf1993Profile().play(audio_file, backend)
+    MarineVhf1993Profile(squelch_seed=333, close_mic_seed=444).play(
+        audio_file, backend
+    )
 
     assert backend.played is not None
     assert backend.played.name == "marine-vhf-1993.wav"
     assert backend.exists_while_playing
     assert backend.contents == b"marine vhf output"
+    assert close_mic_calls == [(audio_file, 444, "abusive")]
     assert len(calls) == 1
 
     command = calls[0]
+    assert "atc-close-mic-abusive.wav" in command[command.index("-i") + 1]
     assert command[command.index("-ar") + 1] == "24000"
     assert command[command.index("-ac") + 1] == "1"
 
     filter_graph = command[command.index("-filter_complex") + 1]
+    assert filter_graph.startswith("[0:a]aresample=48000")
+    assert "close_body" not in filter_graph
+    assert "close_voice" not in filter_graph
     assert "highpass=f=260" in filter_graph
     assert "lowpass=f=3600" in filter_graph
     assert "acrusher=bits=11" in filter_graph
@@ -287,6 +401,43 @@ def test_marine_vhf_1993_profile_renders_pipeline(
     assert "amix=inputs=5:duration=longest:weights=" in filter_graph
     assert "concat=n=5" in filter_graph
     assert "volume=0.9" in filter_graph
+
+
+def test_marine_vhf_1993_profile_streams_two_step_processor() -> None:
+    audio_file = Path("source.wav")
+
+    stream = MarineVhf1993Profile(squelch_seed=333, close_mic_seed=444).stream(
+        audio_file
+    )
+
+    assert stream.input_format == "s16le"
+    assert stream.sample_rate == 24000
+    assert stream.channel_layout == "mono"
+    assert stream.command[:3] == (sys.executable, "-m", "fmplay.marine_vhf_stream")
+    assert stream.command[stream.command.index("--squelch-seed") + 1] == "333"
+    assert stream.command[stream.command.index("--close-mic-seed") + 1] == "444"
+    assert stream.command[-1] == str(audio_file)
+
+
+def test_marine_vhf_1993_raw_input_args_accept_close_mic_pipe() -> None:
+    args = MarineVhf1993Profile(squelch_seed=333)._render_raw_input_args(
+        "pipe:0", "pipe:1"
+    )
+
+    input_index = args.index("-i")
+    assert args[input_index - 6 : input_index + 2] == [
+        "-f",
+        "s16le",
+        "-ar",
+        "16000",
+        "-ac",
+        "1",
+        "-i",
+        "pipe:0",
+    ]
+    assert args[args.index("-filter_complex") + 1].startswith("[0:a]aresample=48000")
+    assert args[args.index("-ar", input_index) + 1] == "24000"
+    assert args[-3:] == ["-f", "s16le", "pipe:1"]
 
 
 def test_marine_vhf_1993_reuses_radio_squelch_events(
@@ -340,8 +491,14 @@ def test_marine_vhf_1993_profile_info_summarizes_reused_squelch_stage() -> None:
         profile_info_graphs["squelch tail crash"]
         == "radio:squelch --squelch-event tail_crash --randomness normal"
     )
+    assert "ATC receiver passband" not in profile_info_graphs
+    assert (
+        profile_info_graphs["abusive close-mic voice front end"]
+        == "atc-close-mic:abusive"
+    )
     assert "open_raw" in render_graph
     assert "tail_raw" in render_graph
+    assert "close_voice" not in render_graph
 
 
 def test_marine_vhf_1993_profile_reports_ffmpeg_failures(
@@ -349,6 +506,16 @@ def test_marine_vhf_1993_profile_reports_ffmpeg_failures(
 ) -> None:
     audio_file = tmp_path / "audio.wav"
     audio_file.write_bytes(b"source audio")
+
+    def fake_render_file(
+        source_path: Path,
+        output_path: Path,
+        *,
+        seed: int,
+        intensity: str,
+        ffmpeg_command: str,
+    ) -> None:
+        output_path.write_bytes(b"close mic voice")
 
     def fake_run(
         command: list[str],
@@ -361,6 +528,7 @@ def test_marine_vhf_1993_profile_reports_ffmpeg_failures(
             returncode=1, cmd=command, stderr="Invalid filter graph"
         )
 
+    monkeypatch.setattr("fmplay.profiles.render_file", fake_render_file)
     monkeypatch.setattr("fmplay.profiles.subprocess.run", fake_run)
 
     with pytest.raises(ProfileError, match="Invalid filter graph"):

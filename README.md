@@ -56,6 +56,14 @@ uv run fmplay --profile passthrough audio.wav
 Available profiles:
 
 - `passthrough`: Plays the source file without applying any degradation.
+- `atc-close-mic`: Plays mono ATC close-talk speech degradation. It applies
+  proximity coloration, input-derived plosive/release emphasis, soft front-end
+  overload, speech compression, and a narrow ATC passband to the source voice
+  only; it does not synthesize or process any background bed. See
+  [docs/close-mic.md](docs/close-mic.md) for model notes, implementation gaps,
+  and validation workflow. Preset variants are available as
+  `atc-close-mic:subtle`, `atc-close-mic:normal`, `atc-close-mic:hot`, and
+  `atc-close-mic:abusive`.
 - `fmradio`: Plays a public FM-radio-style degradation tuned near 98.3 MHz,
   roughly the middle of the public FM broadcast band. It uses `ffmpeg` to stream
   a stereo broadcast chain with FM-style bandwidth limiting, broadcast
@@ -71,9 +79,10 @@ Available profiles:
   8 kHz mono PCM. This profile requires `libgsm` at runtime; if it is missing,
   only this profile fails.
 - `marine-vhf-1993`: Plays a mono 1990s marine VHF Channel 16-style
-  degradation. It streams clean speech through a staged approximation of a
-  shipboard push-to-talk microphone, VHF-FM transmitter limiting, receiver
-  hiss/threshold flutter, squelch open/close noise, and a small bridge speaker.
+  degradation. It first applies the `atc-close-mic:abusive` voice-only stage,
+  then streams that stressed voice through a staged approximation of a shipboard
+  push-to-talk microphone, VHF-FM transmitter limiting, receiver hiss/threshold
+  flutter, squelch open/close noise, and a small bridge speaker.
 
 Playback uses `ffplay` when available so profiled audio can be streamed directly
 to the player instead of being rendered to a temporary file first. If `ffplay`
