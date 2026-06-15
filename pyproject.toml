@@ -9,7 +9,9 @@ authors = [
     { name = "Maciej Bilas" },
 ]
 dependencies = [
+    "numpy>=2.0",
     "rich>=15.0.0",
+    "scipy>=1.14",
     "typer>=0.26.7",
 ]
 

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Protocol
 
 from fmplay.backends import AudioStream, PlaybackBackend
+from fmplay.close_mic import INTENSITIES, CloseMicError, render_file
 from fmplay.libgsm import LibGsmError, NativeLibGsmCodec
 
 
@@ -274,6 +275,92 @@ class LibGsmProfile:
 
 
 @dataclass(frozen=True)
+class AtcCloseMicProfile:
+    """Play audio as close-talk ATC speech feeding a hot radio front end."""
+
+    name: str = "atc-close-mic"
+    description: str = (
+        "ATC close-mic speech with proximity, plosive, and limiter stress."
+    )
+    ffmpeg_command: str = "ffmpeg"
+    seed: int = field(default_factory=_random_seed, repr=False, compare=False)
+    intensity: str = "normal"
+
+    def play(self, path: Path, backend: PlaybackBackend) -> None:
+        with tempfile.TemporaryDirectory(prefix="fmplay-atc-close-mic-") as temp_dir:
+            transformed_path = Path(temp_dir) / "atc-close-mic.wav"
+            self.render(path, transformed_path)
+            backend.play(transformed_path)
+
+    def render(self, source_path: Path, output_path: Path) -> None:
+        if self.intensity not in INTENSITIES:
+            raise ProfileError(
+                f"unknown close-mic intensity {self.intensity!r}; expected "
+                f"{', '.join(INTENSITIES)}"
+            )
+        try:
+            render_file(
+                source_path,
+                output_path,
+                seed=self.seed,
+                intensity=self.intensity,
+                ffmpeg_command=self.ffmpeg_command,
+            )
+        except CloseMicError as exc:
+            raise ProfileError(str(exc)) from exc
+
+    def stream(self, source_path: Path) -> AudioStream:
+        return AudioStream(
+            command=tuple(
+                [
+                    sys.executable,
+                    "-m",
+                    "fmplay.close_mic",
+                    "--ffmpeg",
+                    self.ffmpeg_command,
+                    "--seed",
+                    str(self.seed),
+                    "--intensity",
+                    self.intensity,
+                    str(source_path),
+                ]
+            ),
+            input_format="s16le",
+            sample_rate=16000,
+            channel_layout="mono",
+        )
+
+    def profile_info(self) -> ProfileInfo:
+        return ProfileInfo(
+            name=self.name,
+            description=self.description,
+            primitives=(
+                ProfilePrimitive(
+                    "seeded technique state",
+                    "correlated distance, angle, drive, pop, and channel parameters",
+                ),
+                ProfilePrimitive(
+                    "onset detector",
+                    "signal-only plosive/pause candidates from short-time energy rises",
+                ),
+                ProfilePrimitive(
+                    "synthetic plosives and close-mouth events",
+                    "LF air pops, release bursts, breaths, and sparse lip clicks",
+                ),
+                ProfilePrimitive(
+                    "event-conditioned overload",
+                    "short drive spikes, asymmetric clipping, saturation, "
+                    "and compression",
+                ),
+                ProfilePrimitive(
+                    "ATC receiver passband",
+                    "narrow channel filtering and final safety limiting",
+                ),
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class MarineVhf1993Profile:
     """Play audio as a nearby ship may have heard 1993 VHF Channel 16."""
 
@@ -281,6 +368,7 @@ class MarineVhf1993Profile:
     description: str = "1990s marine VHF Channel 16 radio degradation."
     ffmpeg_command: str = "ffmpeg"
     squelch_seed: int = field(default_factory=_random_seed, repr=False, compare=False)
+    close_mic_seed: int = field(default_factory=_random_seed, repr=False, compare=False)
 
     def play(self, path: Path, backend: PlaybackBackend) -> None:
         with tempfile.TemporaryDirectory(prefix="fmplay-marine-vhf-1993-") as temp_dir:
@@ -290,19 +378,39 @@ class MarineVhf1993Profile:
 
     def render(self, source_path: Path, output_path: Path) -> None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        _run_ffmpeg(
-            self.ffmpeg_command,
-            self.name,
-            self._render_args(source_path, str(output_path)),
-            "rendering 1993 marine VHF Channel 16 audio",
-        )
+        with tempfile.TemporaryDirectory(prefix="fmplay-marine-vhf-voice-") as temp_dir:
+            close_voice_path = Path(temp_dir) / "atc-close-mic-abusive.wav"
+            try:
+                render_file(
+                    source_path,
+                    close_voice_path,
+                    seed=self.close_mic_seed,
+                    intensity="abusive",
+                    ffmpeg_command=self.ffmpeg_command,
+                )
+            except CloseMicError as exc:
+                raise ProfileError(str(exc)) from exc
+            _run_ffmpeg(
+                self.ffmpeg_command,
+                self.name,
+                self._render_args(close_voice_path, str(output_path)),
+                "rendering 1993 marine VHF Channel 16 audio",
+            )
 
     def stream(self, source_path: Path) -> AudioStream:
         return AudioStream(
             command=tuple(
                 [
+                    sys.executable,
+                    "-m",
+                    "fmplay.marine_vhf_stream",
+                    "--ffmpeg",
                     self.ffmpeg_command,
-                    *self._render_args(source_path, "pipe:1"),
+                    "--squelch-seed",
+                    str(self.squelch_seed),
+                    "--close-mic-seed",
+                    str(self.close_mic_seed),
+                    str(source_path),
                 ]
             ),
             input_format="s16le",
@@ -314,7 +422,13 @@ class MarineVhf1993Profile:
         return ProfileInfo(
             name=self.name,
             description=self.description,
-            primitives=_profile_primitives(_marine_vhf_1993_stages(self.squelch_seed)),
+            primitives=(
+                ProfilePrimitive(
+                    "abusive close-mic voice front end",
+                    "atc-close-mic:abusive",
+                ),
+                *_profile_primitives(_marine_vhf_1993_stages(self.squelch_seed)),
+            ),
         )
 
     def _render_args(self, source_path: Path, output: str) -> list[str]:
@@ -325,6 +439,37 @@ class MarineVhf1993Profile:
             "-y",
             "-i",
             str(source_path),
+            "-vn",
+            "-filter_complex",
+            _marine_vhf_1993_filter_graph(self.squelch_seed),
+            "-map",
+            "[out]",
+            "-ar",
+            "24000",
+            "-ac",
+            "1",
+            "-c:a",
+            "pcm_s16le",
+        ]
+        if output == "pipe:1":
+            args.extend(["-f", "s16le"])
+        args.append(output)
+        return args
+
+    def _render_raw_input_args(self, input_pipe: str, output: str) -> list[str]:
+        args = [
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "s16le",
+            "-ar",
+            "16000",
+            "-ac",
+            "1",
+            "-i",
+            input_pipe,
             "-vn",
             "-filter_complex",
             _marine_vhf_1993_filter_graph(self.squelch_seed),
@@ -775,6 +920,17 @@ def _format_subprocess_details(exc: subprocess.CalledProcessError) -> str:
 
 
 _PROFILES: dict[str, Profile] = {
+    AtcCloseMicProfile.name: AtcCloseMicProfile(),
+    **{
+        f"{AtcCloseMicProfile.name}:{intensity}": AtcCloseMicProfile(
+            name=f"{AtcCloseMicProfile.name}:{intensity}",
+            description=(
+                f"ATC close-mic speech using the {intensity} intensity preset."
+            ),
+            intensity=intensity,
+        )
+        for intensity in INTENSITIES
+    },
     FmRadioProfile.name: FmRadioProfile(),
     GsmCodecProfile.name: GsmCodecProfile(),
     LibGsmProfile.name: LibGsmProfile(),

@@ -39,6 +39,17 @@ class InterruptingBackend:
         raise KeyboardInterrupt
 
 
+def fake_close_mic_render(
+    source_path: Path,
+    output_path: Path,
+    *,
+    seed: int,
+    intensity: str,
+    ffmpeg_command: str,
+) -> None:
+    output_path.write_bytes(b"close mic voice")
+
+
 def test_default_profile_plays_file(tmp_path: Path) -> None:
     audio_file = tmp_path / "audio.wav"
     audio_file.write_bytes(b"not a real wav; backend is mocked")
@@ -88,6 +99,7 @@ def test_no_play_still_renders_profile(
         Path(command[-1]).write_bytes(b"marine vhf output")
         return subprocess.CompletedProcess(command, 0, stdout="")
 
+    monkeypatch.setattr("fmplay.profiles.render_file", fake_close_mic_render)
     monkeypatch.setattr("fmplay.profiles.subprocess.run", fake_run)
 
     assert (
@@ -141,6 +153,7 @@ def test_spectrogram_renders_before_playing_with_streaming_backend(
         rendered_audio_paths.append(audio_path)
         output_path.write_bytes(b"png")
 
+    monkeypatch.setattr("fmplay.profiles.render_file", fake_close_mic_render)
     monkeypatch.setattr("fmplay.profiles.subprocess.run", fake_run)
     monkeypatch.setattr("fmplay.cli.render_spectrogram_image", fake_render_spectrogram)
     monkeypatch.setattr("fmplay.cli.print_kitty_image", lambda path: None)
@@ -203,6 +216,7 @@ def test_reused_stage_primitives_print_builtin_options(
         Path(command[-1]).write_bytes(b"marine vhf output")
         return subprocess.CompletedProcess(command, 0, stdout="")
 
+    monkeypatch.setattr("fmplay.profiles.render_file", fake_close_mic_render)
     monkeypatch.setattr("fmplay.profiles.subprocess.run", fake_run)
     monkeypatch.setenv("COLUMNS", "220")
 
@@ -293,6 +307,7 @@ def test_spectrogram_uses_profile_rendered_audio(
         rendered_audio.append((audio_path, audio_path.read_bytes()))
         output_path.write_bytes(b"png")
 
+    monkeypatch.setattr("fmplay.profiles.render_file", fake_close_mic_render)
     monkeypatch.setattr("fmplay.profiles.subprocess.run", fake_run)
     monkeypatch.setattr("fmplay.cli.render_spectrogram_image", fake_render_spectrogram)
     monkeypatch.setattr("fmplay.cli.print_kitty_image", lambda path: None)
@@ -378,6 +393,8 @@ def test_profiles_subcommand_lists_available_profiles(
     assert "Public FM radio degradation tuned near 98.3 MHz." in output
     assert "marine-vhf-1993" in output
     assert "1990s marine VHF Channel 16 radio degradation." in output
+    assert "atc-close-mic:abusive" in output
+    assert "ATC close-mic speech using the abusive intensity preset." in output
     assert "cockpit:a320" not in output
 
 
@@ -402,6 +419,7 @@ def test_bash_completion_completes_shorthand_profiles() -> None:
 
     assert "passthrough" in output.splitlines()
     assert "marine-vhf-1993" in output.splitlines()
+    assert "atc-close-mic:abusive" in output.splitlines()
 
 
 def test_bash_completion_completes_preview_targets() -> None:
