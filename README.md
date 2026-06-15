@@ -85,6 +85,27 @@ Example:
 uv run fmplay --profile fmradio audio.wav
 ```
 
+Preview a profile or reusable profile stage using generated audio:
+
+```sh
+uv run fmplay preview fmradio --source white --duration 10
+```
+
+Reusable profile stages are findable by `preview` but are not listed as normal
+profiles. The `cockpit:a320` stage synthesizes an Airbus A320 cockpit ambient
+bed with seeded ECS/pack roar, windshield boundary-layer flow, avionics fan
+texture, detuned engine tonal leakage, and sparse cockpit ticks/creaks. Omit
+`--seed` for a fresh variant, or pass one to repeat the exact same texture:
+
+```sh
+uv run fmplay preview cockpit:a320
+uv run fmplay preview cockpit:a320 --seed 42 --duration 30
+```
+
+See [docs/cockpit-audio-simulation.md](docs/cockpit-audio-simulation.md) for
+the model notes, tuning caveats, and references to keep for future cockpit
+audio work.
+
 Draw a terminal spectrogram in a Kitty graphics protocol terminal such as
 Ghostty. Spectrograms are rendered from a profiled temporary file before
 playback:

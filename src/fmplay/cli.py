@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import random
 import sys
 import tempfile
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, cast
 
 import typer
 from rich.console import Console
@@ -24,8 +25,16 @@ from fmplay.spectrogram import (
     print_kitty_image,
     render_spectrogram_image,
 )
+from fmplay.stages import (
+    DEFAULT_PREVIEW_DURATION,
+    GeneratedSource,
+    get_stage,
+    is_generated_source,
+    list_stages,
+    render_generated_source,
+)
 
-_COMMANDS = frozenset({"play", "profiles"})
+_COMMANDS = frozenset({"play", "preview", "profiles"})
 
 
 def _error(message: str) -> None:
@@ -91,6 +100,86 @@ def _play_audio(
     except KeyboardInterrupt:
         return 130
     except (PlaybackError, ProfileError, SpectrogramError) as exc:
+        _error(str(exc))
+        raise SystemExit(1) from exc
+
+    return 0
+
+
+def _preview_audio(
+    target_name: str,
+    backend: PlaybackBackend | None = None,
+    *,
+    duration: float = DEFAULT_PREVIEW_DURATION,
+    source: str = "silence",
+    seed: int | None = None,
+) -> int:
+    if duration <= 0:
+        _error("--duration must be greater than 0")
+        raise SystemExit(2)
+    if not is_generated_source(source):
+        _error(_unknown_preview_source_message(source))
+        raise SystemExit(2)
+
+    try:
+        stage = get_stage(target_name)
+    except KeyError:
+        stage = None
+
+    preview_seed = (
+        seed if seed is not None else random.SystemRandom().randrange(1, 2**31)
+    )
+
+    try:
+        playback_backend = backend or default_backend()
+        play_stream = getattr(playback_backend, "play_stream", None)
+        if stage is not None:
+            audio_stream = stage.stream(
+                duration=duration,
+                source=cast(GeneratedSource, source),
+                seed=preview_seed,
+            )
+            _print_preview_info(stage, target_name, duration, source, preview_seed)
+            if callable(play_stream):
+                play_stream(audio_stream)
+                return 0
+
+            with tempfile.TemporaryDirectory(prefix="fmplay-preview-") as temp_dir:
+                rendered_path = Path(temp_dir) / "cockpit-a320.wav"
+                stage.render(
+                    rendered_path,
+                    duration=duration,
+                    source=source,
+                    seed=preview_seed,
+                )
+                playback_backend.play(rendered_path)
+            return 0
+
+        try:
+            profile = get_profile(target_name)
+        except KeyError:
+            available = ", ".join((*list_profiles(), *list_stages()))
+            _error(
+                f"unknown preview target '{target_name}'. "
+                f"Available preview targets: {available}"
+            )
+            raise SystemExit(2) from None
+
+        with tempfile.TemporaryDirectory(prefix="fmplay-preview-") as temp_dir:
+            source_path = Path(temp_dir) / "source.wav"
+            render_generated_source(
+                source_path,
+                duration=duration,
+                source=cast(GeneratedSource, source),
+                seed=preview_seed,
+            )
+            _print_preview_info(profile, target_name, duration, source, preview_seed)
+            _play_or_stream_profile_audio(
+                profile, source_path, Path(temp_dir), playback_backend
+            )
+    except KeyboardInterrupt:
+        return 130
+    except (PlaybackError, ProfileError) as exc:
         _error(str(exc))
         raise SystemExit(1) from exc
 
@@ -175,6 +264,40 @@ def _print_profiles() -> None:
     console.print(table)
 
 
+def _print_preview_info(
+    target: object, target_name: str, duration: float, source: str, seed: int
+) -> None:
+    console = Console()
+    console.print(Text(f"{target_name} preview", style="bold"))
+    description = getattr(target, "description", None)
+    if description:
+        console.print(Text(str(description)))
+    console.print(
+        Text(
+            f"Generated source: {source} | Duration: {duration:g}s | Seed: {seed}",
+            style="dim",
+        )
+    )
+
+    profile_info = _get_profile_info(target)
+    if profile_info is None or not profile_info.primitives:
+        return
+
+    table = Table(
+        "Primitive",
+        "implementation",
+        title="Preview components",
+        show_lines=True,
+    )
+    for primitive in profile_info.primitives:
+        table.add_row(
+            Text(primitive.name, style="bold"),
+            Text(primitive.graph, style="dim", overflow="fold"),
+        )
+
+    console.print(table)
+
+
 def build_app(backend: PlaybackBackend | None = None) -> typer.Typer:
     app = typer.Typer(
         add_completion=False,
@@ -228,6 +351,57 @@ def build_app(backend: PlaybackBackend | None = None) -> typer.Typer:
         )
 
     @app.command()
+    def preview(
+        target: Annotated[
+            str,
+            typer.Argument(
+                help=(
+                    "Profile or profile stage to preview, for example 'cockpit:a320'."
+                )
+            ),
+        ],
+        duration: Annotated[
+            float,
+            typer.Option(
+                "--duration",
+                "-d",
+                help="Preview duration in seconds.",
+                show_default=True,
+            ),
+        ] = DEFAULT_PREVIEW_DURATION,
+        source: Annotated[
+            str,
+            typer.Option(
+                "--source",
+                help=(
+                    "Generated source to preview against: silence, white, pink, brown."
+                ),
+                show_default=True,
+            ),
+        ] = "silence",
+        seed: Annotated[
+            int | None,
+            typer.Option(
+                "--seed",
+                help=(
+                    "RNG seed for repeatable generated noise and cockpit events. "
+                    "Omit for a fresh variant."
+                ),
+                show_default=False,
+            ),
+        ] = None,
+    ) -> int:
+        """Preview a profile or reusable profile stage with generated audio."""
+
+        return _preview_audio(
+            target,
+            backend,
+            duration=duration,
+            source=source,
+            seed=seed,
+        )
+
+    @app.command()
     def profiles() -> int:
         """List available profiles."""
 
@@ -275,6 +449,13 @@ def _normalize_spectrogram_args(args: Sequence[str]) -> list[str]:
         else:
             normalized.append(arg)
     return normalized
+
+
+def _unknown_preview_source_message(source: str) -> str:
+    return (
+        f"unknown generated source '{source}'. "
+        "Available sources: brown, pink, silence, white"
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> None:
