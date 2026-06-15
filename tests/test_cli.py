@@ -386,6 +386,177 @@ def test_preview_a320_cockpit_stage_streams_with_seed(
     assert "ECS and avionics bed" in output
 
 
+def test_preview_radio_squelch_stage_streams_with_seed(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    backend = StreamingFakeBackend()
+
+    assert (
+        run(
+            [
+                "preview",
+                "radio:squelch",
+                "--duration",
+                "8",
+                "--source",
+                "pink",
+                "--seed",
+                "412",
+            ],
+            backend=backend,
+        )
+        == 0
+    )
+
+    assert backend.played == []
+    assert len(backend.streamed) == 1
+    stream = backend.streamed[0]
+    assert stream.input_format == "s16le"
+    assert stream.sample_rate == 48000
+    assert stream.channel_layout == "mono"
+    assert "-filter_complex" in stream.command
+    filter_graph = stream.command[stream.command.index("-filter_complex") + 1]
+    assert "anoisesrc" in filter_graph
+    assert "adelay=" in filter_graph
+    assert "channel_layouts=mono" in filter_graph
+    assert stream.command[-1] == "pipe:1"
+
+    output = capsys.readouterr().out
+    assert "radio:squelch preview" in output
+    assert "Generated source: pink | Duration: 8s | Seed: 412" in output
+    assert "tail crash" in output
+    assert "threshold chatter" in output
+
+
+def test_preview_radio_squelch_stage_streams_custom_thin_gate_flutter(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    backend = StreamingFakeBackend()
+
+    assert (
+        run(
+            [
+                "preview",
+                "radio:squelch",
+                "--duration",
+                "7.744",
+                "--seed",
+                "6",
+                "--squelch-event",
+                "thin_gate_flutter",
+                "--squelch-start",
+                "4.15",
+                "--squelch-duration",
+                "0.30",
+                "--squelch-level-db",
+                "-40",
+                "--squelch-highpass",
+                "1900",
+                "--squelch-lowpass",
+                "7600",
+                "--squelch-sample-rate",
+                "16000",
+            ],
+            backend=backend,
+        )
+        == 0
+    )
+
+    assert backend.played == []
+    assert len(backend.streamed) == 1
+    stream = backend.streamed[0]
+    assert stream.input_format == "s16le"
+    assert stream.sample_rate == 16000
+    assert stream.channel_layout == "mono"
+    filter_graph = stream.command[stream.command.index("-filter_complex") + 1]
+    assert "d=0.3000" in filter_graph
+    assert "adelay=4150:all=1" in filter_graph
+    assert "highpass=f=1900" in filter_graph
+    assert "lowpass=f=7600" in filter_graph
+    assert "compand=attacks=0.001" not in filter_graph
+
+    output = capsys.readouterr().out
+    assert "Squelch event: thin_gate_flutter" in output
+    assert "Start: 4.15s" in output
+    assert "Sample rate: 16000 Hz" in output
+
+
+def test_preview_radio_squelch_stage_renders_custom_output_without_playback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = FakeBackend()
+    output_file = tmp_path / "thin.wav"
+    calls: list[list[str]] = []
+
+    def fake_run(
+        command: list[str],
+        *,
+        check: bool,
+        capture_output: bool,
+        text: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        Path(command[-1]).write_bytes(b"thin gate")
+        return subprocess.CompletedProcess(command, 0, stdout="")
+
+    monkeypatch.setattr("fmplay.stages.subprocess.run", fake_run)
+
+    assert (
+        run(
+            [
+                "preview",
+                "radio:squelch",
+                "--duration",
+                "7.744",
+                "--squelch-event",
+                "thin_gate_flutter",
+                "--squelch-start",
+                "4.15",
+                "--squelch-duration",
+                "0.30",
+                "--squelch-level-db",
+                "-40",
+                "--squelch-highpass",
+                "1900",
+                "--squelch-lowpass",
+                "7600",
+                "--squelch-sample-rate",
+                "16000",
+                "--output",
+                str(output_file),
+                "--no-play",
+            ],
+            backend=backend,
+        )
+        == 0
+    )
+
+    assert backend.played == []
+    assert output_file.read_bytes() == b"thin gate"
+    command = calls[0]
+    assert command[command.index("-ar") + 1] == "16000"
+    assert command[-1] == str(output_file)
+
+
+def test_preview_rejects_squelch_options_for_other_targets(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        run(
+            [
+                "preview",
+                "cockpit:a320",
+                "--squelch-event",
+                "thin_gate_flutter",
+            ],
+            backend=FakeBackend(),
+        )
+
+    assert excinfo.value.code == 2
+    assert "only valid for target 'radio:squelch'" in capsys.readouterr().err
+
+
 def test_preview_regular_profile_streams_generated_source(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

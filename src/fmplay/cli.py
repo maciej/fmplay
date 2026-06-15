@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import random
+import shutil
 import sys
 import tempfile
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, cast
 
@@ -27,6 +29,7 @@ from fmplay.spectrogram import (
 )
 from fmplay.stages import (
     DEFAULT_PREVIEW_DURATION,
+    DEFAULT_SQUELCH_SAMPLE_RATE,
     GeneratedSource,
     get_stage,
     is_generated_source,
@@ -35,6 +38,17 @@ from fmplay.stages import (
 )
 
 _COMMANDS = frozenset({"play", "preview", "profiles"})
+
+
+@dataclass(frozen=True)
+class _SquelchPreviewOptions:
+    event_type: str
+    event_start: float
+    event_duration: float
+    event_level_db: float
+    event_highpass: int
+    event_lowpass: int
+    sample_rate: int
 
 
 def _error(message: str) -> None:
@@ -113,12 +127,24 @@ def _preview_audio(
     duration: float = DEFAULT_PREVIEW_DURATION,
     source: str = "silence",
     seed: int | None = None,
+    output: Path | None = None,
+    no_play: bool = False,
+    squelch_event: str | None = None,
+    squelch_start: float | None = None,
+    squelch_duration: float | None = None,
+    squelch_level_db: float | None = None,
+    squelch_highpass: int | None = None,
+    squelch_lowpass: int | None = None,
+    squelch_sample_rate: int = DEFAULT_SQUELCH_SAMPLE_RATE,
 ) -> int:
     if duration <= 0:
         _error("--duration must be greater than 0")
         raise SystemExit(2)
     if not is_generated_source(source):
         _error(_unknown_preview_source_message(source))
+        raise SystemExit(2)
+    if no_play and output is None:
+        _error("--no-play requires --output for preview")
         raise SystemExit(2)
 
     try:
@@ -142,28 +168,63 @@ def _preview_audio(
     preview_seed = (
         seed if seed is not None else random.SystemRandom().randrange(1, 2**31)
     )
+    squelch_options = _build_squelch_preview_options(
+        target_name=target_name,
+        squelch_event=squelch_event,
+        squelch_start=squelch_start,
+        squelch_duration=squelch_duration,
+        squelch_level_db=squelch_level_db,
+        squelch_highpass=squelch_highpass,
+        squelch_lowpass=squelch_lowpass,
+        squelch_sample_rate=squelch_sample_rate,
+    )
 
     try:
         playback_backend = backend or default_backend()
         play_stream = getattr(playback_backend, "play_stream", None)
         if stage is not None:
-            audio_stream = stage.stream(
-                duration=duration,
-                source=cast(GeneratedSource, source),
-                seed=preview_seed,
+            _print_preview_info(
+                stage,
+                target_name,
+                duration,
+                source,
+                preview_seed,
+                squelch_options=squelch_options,
             )
-            _print_preview_info(stage, target_name, duration, source, preview_seed)
+            if output is not None:
+                output_path = output.expanduser()
+                _render_stage_preview(
+                    stage,
+                    output_path,
+                    duration=duration,
+                    source=source,
+                    seed=preview_seed,
+                    squelch_options=squelch_options,
+                )
+                if not no_play:
+                    playback_backend.play(output_path)
+                return 0
+
+            audio_stream = _stage_preview_stream(
+                stage,
+                duration=duration,
+                source=source,
+                seed=preview_seed,
+                squelch_options=squelch_options,
+            )
             if callable(play_stream):
                 play_stream(audio_stream)
                 return 0
 
             with tempfile.TemporaryDirectory(prefix="fmplay-preview-") as temp_dir:
-                rendered_path = Path(temp_dir) / "cockpit-a320.wav"
-                stage.render(
+                rendered_path = Path(temp_dir) / f"{target_name.replace(':', '-')}.wav"
+                _render_stage_preview(
+                    stage,
                     rendered_path,
                     duration=duration,
                     source=source,
                     seed=preview_seed,
+                    squelch_options=squelch_options,
                 )
                 playback_backend.play(rendered_path)
             return 0
@@ -177,6 +238,18 @@ def _preview_audio(
                 seed=preview_seed,
             )
             _print_preview_info(profile, target_name, duration, source, preview_seed)
+            if output is not None:
+                output_path = output.expanduser()
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                render = getattr(profile, "render", None)
+                if callable(render):
+                    render(source_path, output_path)
+                else:
+                    shutil.copyfile(source_path, output_path)
+                if not no_play:
+                    playback_backend.play(output_path)
+                return 0
+
             _play_or_stream_profile_audio(
                 profile, source_path, Path(temp_dir), playback_backend
             )
@@ -187,6 +260,111 @@ def _preview_audio(
         raise SystemExit(1) from exc
 
     return 0
+
+
+def _build_squelch_preview_options(
+    *,
+    target_name: str,
+    squelch_event: str | None,
+    squelch_start: float | None,
+    squelch_duration: float | None,
+    squelch_level_db: float | None,
+    squelch_highpass: int | None,
+    squelch_lowpass: int | None,
+    squelch_sample_rate: int,
+) -> _SquelchPreviewOptions | None:
+    provided = (
+        squelch_event is not None
+        or squelch_start is not None
+        or squelch_duration is not None
+        or squelch_level_db is not None
+        or squelch_highpass is not None
+        or squelch_lowpass is not None
+        or squelch_sample_rate != DEFAULT_SQUELCH_SAMPLE_RATE
+    )
+    if not provided:
+        return None
+    if target_name != "radio:squelch":
+        _error("squelch preview options are only valid for target 'radio:squelch'")
+        raise SystemExit(2)
+
+    return _SquelchPreviewOptions(
+        event_type=squelch_event or "thin_gate_flutter",
+        event_start=0.0 if squelch_start is None else squelch_start,
+        event_duration=0.30 if squelch_duration is None else squelch_duration,
+        event_level_db=-40.0 if squelch_level_db is None else squelch_level_db,
+        event_highpass=1900 if squelch_highpass is None else squelch_highpass,
+        event_lowpass=7600 if squelch_lowpass is None else squelch_lowpass,
+        sample_rate=squelch_sample_rate,
+    )
+
+
+def _stage_preview_stream(
+    stage: object,
+    *,
+    duration: float,
+    source: str,
+    seed: int,
+    squelch_options: _SquelchPreviewOptions | None,
+) -> object:
+    if squelch_options is not None:
+        stream_custom = getattr(stage, "stream_custom", None)
+        if not callable(stream_custom):
+            raise ProfileError("this stage does not support custom squelch events")
+        return stream_custom(
+            duration=duration,
+            source=cast(GeneratedSource, source),
+            seed=seed,
+            event_type=squelch_options.event_type,
+            event_start=squelch_options.event_start,
+            event_duration=squelch_options.event_duration,
+            event_level_db=squelch_options.event_level_db,
+            event_highpass=squelch_options.event_highpass,
+            event_lowpass=squelch_options.event_lowpass,
+            sample_rate=squelch_options.sample_rate,
+        )
+
+    return stage.stream(
+        duration=duration,
+        source=cast(GeneratedSource, source),
+        seed=seed,
+    )
+
+
+def _render_stage_preview(
+    stage: object,
+    output_path: Path,
+    *,
+    duration: float,
+    source: str,
+    seed: int,
+    squelch_options: _SquelchPreviewOptions | None,
+) -> None:
+    if squelch_options is not None:
+        render_custom = getattr(stage, "render_custom", None)
+        if not callable(render_custom):
+            raise ProfileError("this stage does not support custom squelch events")
+        render_custom(
+            output_path,
+            duration=duration,
+            source=cast(GeneratedSource, source),
+            seed=seed,
+            event_type=squelch_options.event_type,
+            event_start=squelch_options.event_start,
+            event_duration=squelch_options.event_duration,
+            event_level_db=squelch_options.event_level_db,
+            event_highpass=squelch_options.event_highpass,
+            event_lowpass=squelch_options.event_lowpass,
+            sample_rate=squelch_options.sample_rate,
+        )
+        return
+
+    stage.render(
+        output_path,
+        duration=duration,
+        source=cast(GeneratedSource, source),
+        seed=seed,
+    )
 
 
 def _prepare_profile_audio(profile: object, audio_file: Path, temp_dir: Path) -> Path:
@@ -268,7 +446,13 @@ def _print_profiles() -> None:
 
 
 def _print_preview_info(
-    target: object, target_name: str, duration: float, source: str, seed: int
+    target: object,
+    target_name: str,
+    duration: float,
+    source: str,
+    seed: int,
+    *,
+    squelch_options: _SquelchPreviewOptions | None = None,
 ) -> None:
     console = Console()
     console.print(Text(f"{target_name} preview", style="bold"))
@@ -281,6 +465,20 @@ def _print_preview_info(
             style="dim",
         )
     )
+    if squelch_options is not None:
+        console.print(
+            Text(
+                "Squelch event: "
+                f"{squelch_options.event_type} | "
+                f"Start: {squelch_options.event_start:g}s | "
+                f"Duration: {squelch_options.event_duration:g}s | "
+                f"Level: {squelch_options.event_level_db:g} dBFS | "
+                f"Band: {squelch_options.event_highpass}-"
+                f"{squelch_options.event_lowpass} Hz | "
+                f"Sample rate: {squelch_options.sample_rate} Hz",
+                style="dim",
+            )
+        )
 
     profile_info = _get_profile_info(target)
     if profile_info is None or not profile_info.primitives:
@@ -393,6 +591,81 @@ def build_app(backend: PlaybackBackend | None = None) -> typer.Typer:
                 show_default=False,
             ),
         ] = None,
+        output: Annotated[
+            Path | None,
+            typer.Option(
+                "--output",
+                "-o",
+                help="Render preview audio to this WAV file before optional playback.",
+                show_default=False,
+            ),
+        ] = None,
+        no_play: Annotated[
+            bool,
+            typer.Option(
+                "--no-play",
+                help="Render preview output without playing it. Requires --output.",
+            ),
+        ] = False,
+        squelch_event: Annotated[
+            str | None,
+            typer.Option(
+                "--squelch-event",
+                help=(
+                    "radio:squelch custom event: tail_crash, opening_spit, "
+                    "threshold_chatter, carrier_snap, thin_gate_flutter."
+                ),
+                show_default=False,
+            ),
+        ] = None,
+        squelch_start: Annotated[
+            float | None,
+            typer.Option(
+                "--squelch-start",
+                help="radio:squelch custom event start time in seconds.",
+                show_default=False,
+            ),
+        ] = None,
+        squelch_duration: Annotated[
+            float | None,
+            typer.Option(
+                "--squelch-duration",
+                help="radio:squelch custom event duration in seconds.",
+                show_default=False,
+            ),
+        ] = None,
+        squelch_level_db: Annotated[
+            float | None,
+            typer.Option(
+                "--squelch-level-db",
+                help="radio:squelch custom event approximate RMS level in dBFS.",
+                show_default=False,
+            ),
+        ] = None,
+        squelch_highpass: Annotated[
+            int | None,
+            typer.Option(
+                "--squelch-highpass",
+                help="radio:squelch custom event highpass cutoff in Hz.",
+                show_default=False,
+            ),
+        ] = None,
+        squelch_lowpass: Annotated[
+            int | None,
+            typer.Option(
+                "--squelch-lowpass",
+                help="radio:squelch custom event lowpass cutoff in Hz.",
+                show_default=False,
+            ),
+        ] = None,
+        squelch_sample_rate: Annotated[
+            int,
+            typer.Option(
+                "--squelch-sample-rate",
+                help="radio:squelch custom output sample rate.",
+                show_default=True,
+            ),
+        ] = DEFAULT_SQUELCH_SAMPLE_RATE,
     ) -> int:
         """Preview a profile or reusable profile stage with generated audio."""
 
@@ -402,6 +675,15 @@ def build_app(backend: PlaybackBackend | None = None) -> typer.Typer:
             duration=duration,
             source=source,
             seed=seed,
+            output=output,
+            no_play=no_play,
+            squelch_event=squelch_event,
+            squelch_start=squelch_start,
+            squelch_duration=squelch_duration,
+            squelch_level_db=squelch_level_db,
+            squelch_highpass=squelch_highpass,
+            squelch_lowpass=squelch_lowpass,
+            squelch_sample_rate=squelch_sample_rate,
         )
 
     @app.command()
