@@ -359,6 +359,7 @@ class AtcCloseMicProfile:
             ),
         )
 
+
 @dataclass(frozen=True)
 class MarineVhf1993Profile:
     """Play audio as a nearby ship may have heard 1993 VHF Channel 16."""
@@ -367,9 +368,7 @@ class MarineVhf1993Profile:
     description: str = "1990s marine VHF Channel 16 radio degradation."
     ffmpeg_command: str = "ffmpeg"
     squelch_seed: int = field(default_factory=_random_seed, repr=False, compare=False)
-    close_mic_seed: int = field(
-        default_factory=_random_seed, repr=False, compare=False
-    )
+    close_mic_seed: int = field(default_factory=_random_seed, repr=False, compare=False)
 
     def play(self, path: Path, backend: PlaybackBackend) -> None:
         with tempfile.TemporaryDirectory(prefix="fmplay-marine-vhf-1993-") as temp_dir:

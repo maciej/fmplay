@@ -110,9 +110,7 @@ def main() -> None:
         raise SystemExit(f"No degraded audio found in {args.degraded_dir}")
 
     ref_features = [features_for_file(path, "reference") for path in ref_paths]
-    degraded_features = [
-        features_for_file(path, "degraded") for path in degraded_paths
-    ]
+    degraded_features = [features_for_file(path, "degraded") for path in degraded_paths]
     all_features = [*ref_features, *degraded_features]
 
     summary = compare_sets(ref_features, degraded_features)
@@ -241,8 +239,8 @@ def compare_sets(
             and median(degraded, "onset_low_p90_db")
             < median(refs, "onset_low_p90_db") - 6.0
         ),
-        "too_clean_dynamics": median(degraded, "crest_db") > median(refs, "crest_db")
-        + 2.0,
+        "too_clean_dynamics": median(degraded, "crest_db")
+        > median(refs, "crest_db") + 2.0,
     }
     return {
         "distance": distances,
@@ -348,9 +346,10 @@ def onset_events(
     if frame_rms.size < 5:
         return []
     rises = np.diff(20.0 * np.log10(frame_rms + 1e-12))
-    candidates = np.flatnonzero(
-        (rises > 5.5) & (frame_rms[1:] > np.percentile(frame_rms, 68))
-    ) + 1
+    candidates = (
+        np.flatnonzero((rises > 5.5) & (frame_rms[1:] > np.percentile(frame_rms, 68)))
+        + 1
+    )
     events = []
     window = int(0.060 * sr)
     for index in candidates:
@@ -400,8 +399,7 @@ def average_band_ratios(frames: np.ndarray, sr: int) -> dict[str, float]:
             band_energy(frame, sr, 3400, min(7600, sr / 2 - 1)) / total
         )
     return {
-        key: float(np.mean(values)) if values else 0.0
-        for key, values in ratios.items()
+        key: float(np.mean(values)) if values else 0.0 for key, values in ratios.items()
     }
 
 

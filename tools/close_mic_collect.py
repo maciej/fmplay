@@ -469,9 +469,10 @@ def onset_pressure_ratios(
         return []
     db = 20 * np.log10(frame_rms + 1e-12)
     rises = np.diff(db)
-    candidates = np.flatnonzero(
-        (rises > 5.5) & (frame_rms[1:] > np.percentile(frame_rms, 68))
-    ) + 1
+    candidates = (
+        np.flatnonzero((rises > 5.5) & (frame_rms[1:] > np.percentile(frame_rms, 68)))
+        + 1
+    )
     ratios = []
     window = int(0.060 * sr)
     for index in candidates:

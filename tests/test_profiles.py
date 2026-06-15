@@ -366,9 +366,7 @@ def test_marine_vhf_1993_profile_renders_pipeline(
     monkeypatch.setattr("fmplay.profiles.subprocess.run", fake_run)
     backend = InspectingBackend()
 
-    MarineVhf1993Profile(squelch_seed=333, close_mic_seed=444).play(
-        audio_file, backend
-    )
+    MarineVhf1993Profile(squelch_seed=333, close_mic_seed=444).play(audio_file, backend)
 
     assert backend.played is not None
     assert backend.played.name == "marine-vhf-1993.wav"

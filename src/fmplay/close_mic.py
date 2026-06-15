@@ -298,7 +298,7 @@ class CloseMicStreamProcessor:
         self.context = np.array([], dtype=np.float64)
         self.context_samples = int(0.24 * SAMPLE_RATE)
         self.position = 0
-        self.last_onset_index = -10**9
+        self.last_onset_index = -(10**9)
 
     def process_chunk(
         self, samples: Sequence[float] | NDArray[np.floating]
@@ -664,9 +664,7 @@ def inject_air_pop(
     if start > closure_start:
         n = np.arange(start - closure_start, dtype=np.float64)
         t = n / max(1, closure)
-        attenuation = 1.0 - (
-            0.24 + 0.36 * state.bad_technique
-        ) * np.sin(math.pi * t)
+        attenuation = 1.0 - (0.24 + 0.36 * state.bad_technique) * np.sin(math.pi * t)
         samples[closure_start:start] *= attenuation
     frequency = rng.uniform(38.0, 85.0)
     radio_frequency = rng.uniform(265.0, 360.0)
@@ -828,11 +826,9 @@ def inject_radio_pop_residue(
         duration = int(rng.uniform(0.024, 0.070) * SAMPLE_RATE)
         frequency = rng.uniform(275.0, 365.0)
         decay = rng.uniform(0.010, 0.026)
-        amplitude = (
-            0.035
-            + 0.16 * state.bad_technique
-            + 0.11 * state.proximity
-        ) * (0.65 + onset.strength)
+        amplitude = (0.035 + 0.16 * state.bad_technique + 0.11 * state.proximity) * (
+            0.65 + onset.strength
+        )
         polarity = -1.0 if rng.random() < 0.5 else 1.0
         end = min(output.size, start + duration)
         if end <= start:
@@ -840,10 +836,7 @@ def inject_radio_pop_residue(
         t = np.arange(end - start, dtype=np.float64) / SAMPLE_RATE
         envelope = np.exp(-t / decay)
         output[start:end] += (
-            polarity
-            * amplitude
-            * envelope
-            * np.sin(2.0 * math.pi * frequency * t)
+            polarity * amplitude * envelope * np.sin(2.0 * math.pi * frequency * t)
         )
     return output
 
