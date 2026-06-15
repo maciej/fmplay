@@ -730,6 +730,29 @@ def _radio_squelch_filter_graph(
     return ";".join(stages)
 
 
+def radio_squelch_event_graph(
+    *,
+    event_type: SquelchEventKind,
+    output: str,
+    seed: int,
+    index: int = 0,
+) -> str:
+    """Return one normal randomized radio squelch event graph."""
+    rng = random.Random(seed)
+    raw_output = f"{output}_raw"
+    return (
+        _squelch_event_graph(
+            index=index,
+            event=_make_squelch_event(event_type, 0.0, rng),
+            output=raw_output,
+        )
+        + ";"
+        + f"[{raw_output}]"
+        + ",".join(_radio_squelch_output_filters(thin_mode=False))
+        + f"[{output}]"
+    )
+
+
 def _radio_squelch_output_filters(*, thin_mode: bool) -> list[str]:
     if thin_mode:
         return [

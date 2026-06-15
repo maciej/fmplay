@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import random
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
@@ -48,6 +49,10 @@ class ProfileInfo:
     name: str
     description: str
     primitives: tuple[ProfilePrimitive, ...]
+
+
+def _random_seed() -> int:
+    return random.SystemRandom().randrange(1, 2**31)
 
 
 @dataclass(frozen=True)
@@ -275,6 +280,7 @@ class MarineVhf1993Profile:
     name: str = "marine-vhf-1993"
     description: str = "1990s marine VHF Channel 16 radio degradation."
     ffmpeg_command: str = "ffmpeg"
+    squelch_seed: int = field(default_factory=_random_seed, repr=False, compare=False)
 
     def play(self, path: Path, backend: PlaybackBackend) -> None:
         with tempfile.TemporaryDirectory(prefix="fmplay-marine-vhf-1993-") as temp_dir:
@@ -308,7 +314,7 @@ class MarineVhf1993Profile:
         return ProfileInfo(
             name=self.name,
             description=self.description,
-            primitives=_profile_primitives(_MARINE_VHF_1993_STAGES),
+            primitives=_profile_primitives(_marine_vhf_1993_stages(self.squelch_seed)),
         )
 
     def _render_args(self, source_path: Path, output: str) -> list[str]:
@@ -321,7 +327,7 @@ class MarineVhf1993Profile:
             str(source_path),
             "-vn",
             "-filter_complex",
-            _marine_vhf_1993_filter_graph(),
+            _marine_vhf_1993_filter_graph(self.squelch_seed),
             "-map",
             "[out]",
             "-ar",
@@ -427,13 +433,15 @@ _GSM_FALLBACK_FILTER = ",".join(
 class _FilterStage:
     name: str
     graph: str
+    display: str | None = None
 
 
 def _profile_primitives(
     stages: tuple[_FilterStage, ...],
 ) -> tuple[ProfilePrimitive, ...]:
     return tuple(
-        ProfilePrimitive(name=stage.name, graph=stage.graph) for stage in stages
+        ProfilePrimitive(name=stage.name, graph=stage.display or stage.graph)
+        for stage in stages
     )
 
 
@@ -584,180 +592,152 @@ def _marine_vhf_receiver_static_graph(
     )
 
 
-_MARINE_VHF_1993_STAGES = (
-    _FilterStage(
-        "transmitter microphone and limiter",
-        ",".join(
-            [
-                "[0:a]aresample=48000",
-                "aformat=channel_layouts=mono",
-                "highpass=f=260",
-                "lowpass=f=3600",
-                (
-                    "compand=attacks=0.004:decays=0.08:"
-                    "points=-80/-70|-45/-30|-24/-14|-12/-7|-3/-2|0/-1:"
-                    "soft-knee=2:gain=5"
+def _marine_vhf_squelch_graph(
+    *, event_type: str, output: str, seed: int, index: int
+) -> str:
+    from fmplay.stages import radio_squelch_event_graph
+
+    return radio_squelch_event_graph(
+        event_type=event_type,
+        output=output,
+        seed=seed,
+        index=index,
+    )
+
+
+def _marine_vhf_1993_stages(squelch_seed: int) -> tuple[_FilterStage, ...]:
+    squelch_rng = random.Random(squelch_seed)
+    opening_seed = squelch_rng.randrange(1, 2**31)
+    tail_seed = squelch_rng.randrange(1, 2**31)
+
+    return (
+        _FilterStage(
+            "transmitter microphone and limiter",
+            ",".join(
+                [
+                    "[0:a]aresample=48000",
+                    "aformat=channel_layouts=mono",
+                    "highpass=f=260",
+                    "lowpass=f=3600",
+                    (
+                        "compand=attacks=0.004:decays=0.08:"
+                        "points=-80/-70|-45/-30|-24/-14|-12/-7|-3/-2|0/-1:"
+                        "soft-knee=2:gain=5"
+                    ),
+                    "alimiter=limit=0.88",
+                    "acrusher=bits=11:mode=log:aa=1",
+                    "tremolo=f=3.2:d=0.035",
+                    r"volume='if(lt(mod(t\,2.4)\,0.035)\,0.62\,1)':eval=frame",
+                ]
+            )
+            + "[tx]",
+        ),
+        _FilterStage(
+            "vhf receiver hiss",
+            ",".join(
+                [
+                    "anoisesrc=r=48000:a=0.018:c=white:s=19930114",
+                    "highpass=f=2400",
+                    "lowpass=f=6200",
+                    "tremolo=f=5.1:d=0.025",
+                    r"volume='0.93+0.04*sin(17*t)':eval=frame",
+                ]
+            )
+            + "[hiss]",
+        ),
+        _FilterStage(
+            "shipboard power rumble",
+            ",".join(
+                [
+                    "anoisesrc=r=48000:a=0.006:c=pink:s=19930115",
+                    "lowpass=f=260",
+                ]
+            )
+            + "[rumble]",
+        ),
+        _FilterStage(
+            "pre-transmission receiver static",
+            _marine_vhf_receiver_static_graph(
+                prefix="pre",
+                duration="0.65",
+                hiss_seed=19930112,
+                low_seed=19930111,
+                crackle_gate_state=2,
+                crackle_level_state=3,
+                fade_filters=(
+                    "afade=t=in:st=0:d=0.015",
+                    "afade=t=out:st=0.56:d=0.09",
                 ),
-                "alimiter=limit=0.88",
-                "acrusher=bits=11:mode=log:aa=1",
-                "tremolo=f=3.2:d=0.035",
-                r"volume='if(lt(mod(t\,2.4)\,0.035)\,0.62\,1)':eval=frame",
-            ]
-        )
-        + "[tx]",
-    ),
-    _FilterStage(
-        "vhf receiver hiss",
-        ",".join(
-            [
-                "anoisesrc=r=48000:a=0.018:c=white:s=19930114",
-                "highpass=f=2400",
-                "lowpass=f=6200",
-                "tremolo=f=5.1:d=0.025",
-                r"volume='0.93+0.04*sin(17*t)':eval=frame",
-            ]
-        )
-        + "[hiss]",
-    ),
-    _FilterStage(
-        "shipboard power rumble",
-        ",".join(
-            [
-                "anoisesrc=r=48000:a=0.006:c=pink:s=19930115",
-                "lowpass=f=260",
-            ]
-        )
-        + "[rumble]",
-    ),
-    _FilterStage(
-        "pre-transmission receiver static",
-        _marine_vhf_receiver_static_graph(
-            prefix="pre",
-            duration="0.65",
-            hiss_seed=19930112,
-            low_seed=19930111,
-            crackle_gate_state=2,
-            crackle_level_state=3,
-            fade_filters=(
-                "afade=t=in:st=0:d=0.015",
-                "afade=t=out:st=0.56:d=0.09",
+                output="pre_static",
             ),
-            output="pre_static",
         ),
-    ),
-    _FilterStage(
-        "nearby ship receiver speaker",
-        ",".join(
-            [
-                "[tx][hiss][rumble]amix=inputs=3:duration=first:"
-                "weights='1 0.35 0.12':normalize=0",
-                "highpass=f=330",
-                "lowpass=f=3100",
-                "equalizer=f=850:t=q:w=1.3:g=4",
-                "equalizer=f=2300:t=q:w=1.4:g=-3",
-                "alimiter=limit=0.92",
-            ]
-        )
-        + "[body]",
-    ),
-    _FilterStage(
-        "squelch open noise",
-        ",".join(
-            [
-                "anoisesrc=r=48000:a=0.075:c=white:d=0.11:s=19930116",
-                "highpass=f=2200",
-                "lowpass=f=6200",
-                "afade=t=out:st=0.04:d=0.07",
-            ]
-        )
-        + "[open_noise]",
-    ),
-    _FilterStage(
-        "push-to-talk open click",
-        ",".join(
-            [
-                "sine=f=950:r=48000:d=0.018",
-                "afade=t=out:st=0:d=0.018",
-                "volume=2.8",
-            ]
-        )
-        + "[open_click]",
-    ),
-    _FilterStage(
-        "squelch open mix",
-        ",".join(
-            [
-                "[open_noise][open_click]amix=inputs=2:duration=longest:normalize=0",
-                "alimiter=limit=0.9",
-            ]
-        )
-        + "[open]",
-    ),
-    _FilterStage(
-        "squelch tail noise",
-        ",".join(
-            [
-                "anoisesrc=r=48000:a=0.08:c=white:d=0.22:s=19930117",
-                "highpass=f=2200",
-                "lowpass=f=6200",
-                "afade=t=out:st=0.13:d=0.09",
-            ]
-        )
-        + "[tail_noise]",
-    ),
-    _FilterStage(
-        "push-to-talk release click",
-        ",".join(
-            [
-                "sine=f=520:r=48000:d=0.022",
-                "afade=t=out:st=0:d=0.022",
-                "volume=1.8",
-            ]
-        )
-        + "[tail_click]",
-    ),
-    _FilterStage(
-        "squelch tail mix",
-        ",".join(
-            [
-                "[tail_click][tail_noise]amix=inputs=2:duration=longest:normalize=0",
-                "alimiter=limit=0.9",
-            ]
-        )
-        + "[tail]",
-    ),
-    _FilterStage(
-        "post-transmission receiver static",
-        _marine_vhf_receiver_static_graph(
-            prefix="post",
-            duration="0.85",
-            hiss_seed=19930118,
-            low_seed=19930119,
-            crackle_gate_state=4,
-            crackle_level_state=5,
-            fade_filters=("afade=t=out:st=0.72:d=0.13",),
-            output="post_static",
+        _FilterStage(
+            "nearby ship receiver speaker",
+            ",".join(
+                [
+                    "[tx][hiss][rumble]amix=inputs=3:duration=first:"
+                    "weights='1 0.35 0.12':normalize=0",
+                    "highpass=f=330",
+                    "lowpass=f=3100",
+                    "equalizer=f=850:t=q:w=1.3:g=4",
+                    "equalizer=f=2300:t=q:w=1.4:g=-3",
+                    "alimiter=limit=0.92",
+                ]
+            )
+            + "[body]",
         ),
-    ),
-    _FilterStage(
-        "final concatenation",
-        ",".join(
-            [
-                "[pre_static][open][body][tail][post_static]concat=n=5:v=0:a=1",
-                "aresample=24000",
-                "aformat=channel_layouts=mono",
-                "alimiter=limit=0.95",
-                "volume=0.9",
-            ]
-        )
-        + "[out]",
-    ),
-)
+        _FilterStage(
+            "squelch opening spit",
+            _marine_vhf_squelch_graph(
+                event_type="opening_spit",
+                output="open",
+                seed=opening_seed,
+                index=0,
+            ),
+            "radio:squelch --squelch-event opening_spit --randomness normal",
+        ),
+        _FilterStage(
+            "squelch tail crash",
+            _marine_vhf_squelch_graph(
+                event_type="tail_crash",
+                output="tail",
+                seed=tail_seed,
+                index=1,
+            ),
+            "radio:squelch --squelch-event tail_crash --randomness normal",
+        ),
+        _FilterStage(
+            "post-transmission receiver static",
+            _marine_vhf_receiver_static_graph(
+                prefix="post",
+                duration="0.85",
+                hiss_seed=19930118,
+                low_seed=19930119,
+                crackle_gate_state=4,
+                crackle_level_state=5,
+                fade_filters=("afade=t=out:st=0.72:d=0.13",),
+                output="post_static",
+            ),
+        ),
+        _FilterStage(
+            "final concatenation",
+            ",".join(
+                [
+                    "[pre_static][open][body][tail][post_static]concat=n=5:v=0:a=1",
+                    "aresample=24000",
+                    "aformat=channel_layouts=mono",
+                    "alimiter=limit=0.95",
+                    "volume=0.9",
+                ]
+            )
+            + "[out]",
+        ),
+    )
 
 
-def _marine_vhf_1993_filter_graph() -> str:
+def _marine_vhf_1993_filter_graph(squelch_seed: int) -> str:
     graphs: list[str] = []
-    for stage in _MARINE_VHF_1993_STAGES:
+    for stage in _marine_vhf_1993_stages(squelch_seed):
         if not stage.name:
             raise ProfileError("Marine VHF profile contains an unnamed filter stage.")
         graphs.append(stage.graph)

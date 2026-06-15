@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import random
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
+import fmplay.profiles as profiles
 from fmplay.libgsm import LibGsmError
 from fmplay.profiles import (
     FmRadioProfile,
@@ -280,9 +282,66 @@ def test_marine_vhf_1993_profile_renders_pipeline(
     assert "tremolo=f=5.1:d=0.025" in filter_graph
     assert "anoisesrc=r=48000:a=0.034:c=white:d=0.85:s=19930118" in filter_graph
     assert "random(4)" in filter_graph
-    assert "sine=f=950" in filter_graph
+    assert "[open_raw]highpass=f=55" in filter_graph
+    assert "[tail_raw]highpass=f=55" in filter_graph
+    assert "amix=inputs=5:duration=longest:weights=" in filter_graph
     assert "concat=n=5" in filter_graph
     assert "volume=0.9" in filter_graph
+
+
+def test_marine_vhf_1993_reuses_radio_squelch_events(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str, int, int]] = []
+    expected_rng = random.Random(333)
+    expected_opening_seed = expected_rng.randrange(1, 2**31)
+    expected_tail_seed = expected_rng.randrange(1, 2**31)
+
+    def fake_squelch_event_graph(
+        *,
+        event_type: str,
+        output: str,
+        seed: int,
+        index: int = 0,
+    ) -> str:
+        calls.append((event_type, output, seed, index))
+        return f"anullsrc=r=48000:cl=mono:d=0.1[{output}]"
+
+    monkeypatch.setattr(
+        "fmplay.stages.radio_squelch_event_graph",
+        fake_squelch_event_graph,
+    )
+
+    filter_graph = profiles._marine_vhf_1993_filter_graph(333)
+
+    assert calls == [
+        ("opening_spit", "open", expected_opening_seed, 0),
+        ("tail_crash", "tail", expected_tail_seed, 1),
+    ]
+    assert "[pre_static][open][body][tail][post_static]concat=n=5" in filter_graph
+
+
+def test_marine_vhf_1993_profile_info_summarizes_reused_squelch_stage() -> None:
+    audio_file = Path("source.wav")
+    profile = MarineVhf1993Profile(squelch_seed=333)
+
+    profile_info_graphs = {
+        primitive.name: primitive.graph
+        for primitive in profile.profile_info().primitives
+    }
+    render_args = profile._render_args(audio_file, "out.wav")
+    render_graph = render_args[render_args.index("-filter_complex") + 1]
+
+    assert (
+        profile_info_graphs["squelch opening spit"]
+        == "radio:squelch --squelch-event opening_spit --randomness normal"
+    )
+    assert (
+        profile_info_graphs["squelch tail crash"]
+        == "radio:squelch --squelch-event tail_crash --randomness normal"
+    )
+    assert "open_raw" in render_graph
+    assert "tail_raw" in render_graph
 
 
 def test_marine_vhf_1993_profile_reports_ffmpeg_failures(
