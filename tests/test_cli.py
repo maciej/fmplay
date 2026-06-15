@@ -345,6 +345,108 @@ def test_profiles_subcommand_lists_available_profiles(
     assert "Public FM radio degradation tuned near 98.3 MHz." in output
     assert "marine-vhf-1993" in output
     assert "1990s marine VHF Channel 16 radio degradation." in output
+    assert "cockpit:a320" not in output
+
+
+def test_preview_a320_cockpit_stage_streams_with_seed(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    backend = StreamingFakeBackend()
+
+    assert (
+        run(
+            [
+                "preview",
+                "cockpit:a320",
+                "--duration",
+                "12",
+                "--source",
+                "white",
+                "--seed",
+                "42",
+            ],
+            backend=backend,
+        )
+        == 0
+    )
+
+    assert backend.played == []
+    assert len(backend.streamed) == 1
+    stream = backend.streamed[0]
+    assert stream.input_format == "s16le"
+    assert stream.sample_rate == 48000
+    assert stream.channel_layout == "stereo"
+    assert "-filter_complex" in stream.command
+    assert "anoisesrc" in stream.command[stream.command.index("-filter_complex") + 1]
+    assert stream.command[-1] == "pipe:1"
+
+    output = capsys.readouterr().out
+    assert "cockpit:a320 preview" in output
+    assert "Generated source: white | Duration: 12s | Seed: 42" in output
+    assert "ECS and avionics bed" in output
+
+
+def test_preview_regular_profile_streams_generated_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = StreamingFakeBackend()
+    calls: list[list[str]] = []
+
+    def fake_run(
+        command: list[str],
+        *,
+        check: bool,
+        capture_output: bool,
+        text: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        Path(command[-1]).write_bytes(b"generated source")
+        return subprocess.CompletedProcess(command, 0, stdout="")
+
+    monkeypatch.setattr("fmplay.stages.subprocess.run", fake_run)
+
+    assert (
+        run(
+            [
+                "preview",
+                "fmradio",
+                "--duration",
+                "3",
+                "--source",
+                "pink",
+                "--seed",
+                "101",
+            ],
+            backend=backend,
+        )
+        == 0
+    )
+
+    assert len(calls) == 1
+    assert "anoisesrc" in calls[0][calls[0].index("-filter_complex") + 1]
+    assert backend.played == []
+    assert len(backend.streamed) == 1
+    stream = backend.streamed[0]
+    assert stream.input_format == "s16le"
+    assert stream.sample_rate == 44100
+    assert any(command_part.endswith("source.wav") for command_part in stream.command)
+
+
+def test_preview_rejects_unknown_target_before_resolving_backend(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "fmplay.cli.default_backend",
+        lambda: pytest.fail("invalid targets should not resolve playback"),
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        run(["preview", "cockpit:boeing"])
+
+    assert excinfo.value.code == 2
+    error = capsys.readouterr().err
+    assert "unknown preview target 'cockpit:boeing'" in error
+    assert "cockpit:a320" in error
 
 
 def test_keyboard_interrupt_exits_without_traceback(
