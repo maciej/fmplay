@@ -3,6 +3,7 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #   "mlx-whisper @ git+https://github.com/maciej/mlx-examples.git@maciej/whisper-beam-search-candidates#subdirectory=whisper",
+#   "modal>=1.0",
 #   "numpy>=2.0",
 #   "rich>=15.0.0",
 #   "scipy>=1.14",
@@ -17,10 +18,11 @@ import sys
 import time
 import unicodedata
 from dataclasses import asdict, dataclass
+from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, Any
+from types import TracebackType
+from typing import Annotated, Any, Protocol
 
-import mlx_whisper
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -36,7 +38,37 @@ DEFAULT_AUDIO = REPO_ROOT / "clips/audio/biebrza_broadcast.mp3"
 DEFAULT_REFERENCE = REPO_ROOT / "clips/recipes/biebrza-broadcast.txt"
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "artifacts/biebrza-whisper-bench"
 DEFAULT_MODEL = "mlx-community/whisper-medium-mlx"
+DEFAULT_MODAL_MODEL = "medium"
+DEFAULT_MODAL_GPU = "T4"
 DEFAULT_LANGUAGE = "pl"
+
+
+class Backend(StrEnum):
+    LOCAL = "local"
+    MODAL = "modal"
+
+
+class WhisperBackend(Protocol):
+    name: str
+
+    def __enter__(self) -> WhisperBackend: ...
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool | None: ...
+
+    def transcribe(
+        self,
+        audio_path: Path,
+        *,
+        model: str,
+        language: str,
+        initial_prompt: str | None,
+        verbose: bool,
+    ) -> str: ...
 
 
 @dataclass(frozen=True)
@@ -53,9 +85,155 @@ class WerResult:
 class TranscriptionResult:
     label: str
     audio_path: str
+    backend: str
     text: str
     seconds: float
     wer: WerResult
+
+
+class LocalWhisperBackend:
+    name = Backend.LOCAL.value
+
+    def __enter__(self) -> LocalWhisperBackend:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        return None
+
+    def transcribe(
+        self,
+        audio_path: Path,
+        *,
+        model: str,
+        language: str,
+        initial_prompt: str | None,
+        verbose: bool,
+    ) -> str:
+        import mlx_whisper
+
+        result = mlx_whisper.transcribe(
+            str(audio_path),
+            path_or_hf_repo=model,
+            language=language,
+            initial_prompt=initial_prompt,
+            verbose=verbose,
+        )
+        return str(result["text"]).strip()
+
+
+class ModalWhisperBackend:
+    name = Backend.MODAL.value
+
+    def __init__(self, *, gpu: str, show_output: bool) -> None:
+        self.gpu = gpu
+        self.show_output = show_output
+        self._modal: Any | None = None
+        self._transcribe: Any | None = None
+        self._output_context: Any | None = None
+        self._app_context: Any | None = None
+
+    def __enter__(self) -> ModalWhisperBackend:
+        self._modal, app, self._transcribe = build_modal_whisper_app(gpu=self.gpu)
+        if self.show_output:
+            self._output_context = self._modal.enable_output()
+            self._output_context.__enter__()
+        self._app_context = app.run()
+        self._app_context.__enter__()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool | None:
+        suppress = None
+        if self._app_context is not None:
+            suppress = self._app_context.__exit__(exc_type, exc_value, traceback)
+        if self._output_context is not None:
+            output_suppress = self._output_context.__exit__(
+                exc_type, exc_value, traceback
+            )
+            suppress = bool(suppress) or bool(output_suppress)
+        return suppress
+
+    def transcribe(
+        self,
+        audio_path: Path,
+        *,
+        model: str,
+        language: str,
+        initial_prompt: str | None,
+        verbose: bool,
+    ) -> str:
+        if self._transcribe is None:
+            raise RuntimeError("Modal backend must be entered before transcription")
+        return self._transcribe.remote(
+            audio_path.read_bytes(),
+            audio_path.suffix,
+            model=model,
+            language=language,
+            initial_prompt=initial_prompt,
+            verbose=verbose,
+        )
+
+
+def build_modal_whisper_app(*, gpu: str) -> tuple[Any, Any, Any]:
+    import modal
+
+    python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+    image = (
+        modal.Image.debian_slim(python_version=python_version)
+        .apt_install("ffmpeg")
+        .uv_pip_install("openai-whisper")
+    )
+    app = modal.App(
+        "fmplay-biebrza-whisper-bench",
+        image=image,
+        include_source=False,
+    )
+
+    @app.function(gpu=gpu, timeout=60 * 30, serialized=True, include_source=False)
+    def transcribe(
+        audio_bytes: bytes,
+        suffix: str,
+        *,
+        model: str,
+        language: str,
+        initial_prompt: str | None,
+        verbose: bool,
+    ) -> str:
+        import tempfile
+
+        import whisper
+
+        global _model_cache
+        try:
+            model_cache = _model_cache
+        except NameError:
+            model_cache = _model_cache = {}
+
+        whisper_model = model_cache.get(model)
+        if whisper_model is None:
+            whisper_model = model_cache[model] = whisper.load_model(model)
+
+        with tempfile.NamedTemporaryFile(suffix=suffix) as audio_file:
+            audio_file.write(audio_bytes)
+            audio_file.flush()
+            result = whisper_model.transcribe(
+                audio_file.name,
+                language=language,
+                initial_prompt=initial_prompt,
+                verbose=verbose,
+            )
+        return str(result["text"]).strip()
+
+    return modal, app, transcribe
 
 
 def main(
@@ -83,6 +261,28 @@ def main(
             ),
         ),
     ] = DEFAULT_MODEL,
+    backend: Annotated[
+        Backend,
+        typer.Option(
+            "--backend",
+            case_sensitive=False,
+            help="Whisper execution backend.",
+        ),
+    ] = Backend.LOCAL,
+    modal_model: Annotated[
+        str,
+        typer.Option(
+            "--modal-model",
+            help="OpenAI Whisper model name to use when --backend=modal.",
+        ),
+    ] = DEFAULT_MODAL_MODEL,
+    modal_gpu: Annotated[
+        str,
+        typer.Option(
+            "--modal-gpu",
+            help="Modal GPU type to use when --backend=modal.",
+        ),
+    ] = DEFAULT_MODAL_GPU,
     language: Annotated[
         str,
         typer.Option("--language", help="Whisper language hint."),
@@ -104,7 +304,7 @@ def main(
     ] = "ffmpeg",
     verbose: Annotated[
         bool,
-        typer.Option("--verbose", help="Show verbose mlx-whisper output."),
+        typer.Option("--verbose", help="Show verbose Whisper output."),
     ] = False,
     json_output: Annotated[
         bool,
@@ -123,82 +323,94 @@ def main(
 
     reference_text = reference_path.read_text(encoding="utf-8")
     degraded_path = output_dir / "biebrza_broadcast.atc-close-mic-abusive.wav"
+    whisper_backend = build_whisper_backend(
+        backend,
+        modal_gpu=modal_gpu,
+        show_output=not json_output,
+    )
+    backend_model = modal_model if backend == Backend.MODAL else model
+    backend_gpu = modal_gpu if backend == Backend.MODAL else None
 
-    if not json_output:
-        print_config(
-            console,
+    with whisper_backend:
+        if not json_output:
+            print_config(
+                console,
+                audio_path=audio_path,
+                reference_path=reference_path,
+                backend=whisper_backend.name,
+                model=backend_model,
+                gpu=backend_gpu,
+                language=language,
+                initial_prompt=initial_prompt,
+            )
+
+        original = transcribe_and_score(
+            whisper_backend=whisper_backend,
+            console=console,
+            label="original",
             audio_path=audio_path,
-            reference_path=reference_path,
-            model=model,
+            reference_text=reference_text,
+            model=backend_model,
             language=language,
             initial_prompt=initial_prompt,
+            verbose=verbose,
         )
 
-    original = transcribe_and_score(
-        mlx_whisper=mlx_whisper,
-        console=console,
-        label="original",
-        audio_path=audio_path,
-        reference_text=reference_text,
-        model=model,
-        language=language,
-        initial_prompt=initial_prompt,
-        verbose=verbose,
-    )
-
-    close_mic_profile = (
-        AtcCloseMicProfile(
-            intensity="abusive",
-            ffmpeg_command=ffmpeg,
+        close_mic_profile = (
+            AtcCloseMicProfile(
+                intensity="abusive",
+                ffmpeg_command=ffmpeg,
+            )
+            if close_mic_seed is None
+            else AtcCloseMicProfile(
+                seed=close_mic_seed,
+                intensity="abusive",
+                ffmpeg_command=ffmpeg,
+            )
         )
-        if close_mic_seed is None
-        else AtcCloseMicProfile(
-            seed=close_mic_seed,
-            intensity="abusive",
-            ffmpeg_command=ffmpeg,
+        console.print(
+            "rendering [bold]atc-close-mic:abusive[/bold] "
+            f"(seed={close_mic_profile.seed}) -> [cyan]{degraded_path}[/cyan]"
         )
-    )
-    console.print(
-        "rendering [bold]atc-close-mic:abusive[/bold] "
-        f"(seed={close_mic_profile.seed}) -> [cyan]{degraded_path}[/cyan]"
-    )
-    try:
-        close_mic_profile.render(audio_path, degraded_path)
-    except ProfileError as exc:
-        typer.echo(f"failed to render atc-close-mic:abusive: {exc}", err=True)
-        raise typer.Exit(1) from exc
+        try:
+            close_mic_profile.render(audio_path, degraded_path)
+        except ProfileError as exc:
+            typer.echo(f"failed to render atc-close-mic:abusive: {exc}", err=True)
+            raise typer.Exit(1) from exc
 
-    abusive = transcribe_and_score(
-        mlx_whisper=mlx_whisper,
-        console=console,
-        label="atc-close-mic:abusive",
-        audio_path=degraded_path,
-        reference_text=reference_text,
-        model=model,
-        language=language,
-        initial_prompt=initial_prompt,
-        verbose=verbose,
-    )
+        abusive = transcribe_and_score(
+            whisper_backend=whisper_backend,
+            console=console,
+            label="atc-close-mic:abusive",
+            audio_path=degraded_path,
+            reference_text=reference_text,
+            model=backend_model,
+            language=language,
+            initial_prompt=initial_prompt,
+            verbose=verbose,
+        )
 
-    write_text(output_dir / "original.txt", original.text)
-    write_text(output_dir / "atc-close-mic-abusive.txt", abusive.text)
+        write_text(output_dir / "original.txt", original.text)
+        write_text(output_dir / "atc-close-mic-abusive.txt", abusive.text)
 
-    report = {
-        "audio": str(audio_path),
-        "reference": str(reference_path),
-        "model": model,
-        "language": language,
-        "initial_prompt": initial_prompt,
-        "close_mic_profile": "atc-close-mic:abusive",
-        "close_mic_seed": close_mic_profile.seed,
-        "results": [result_to_dict(original), result_to_dict(abusive)],
-        "wer_delta": abusive.wer.wer - original.wer.wer,
-    }
-    report_path = output_dir / "summary.json"
-    report_path.write_text(
-        jsonlib.dumps(report, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+        report = {
+            "audio": str(audio_path),
+            "reference": str(reference_path),
+            "backend": whisper_backend.name,
+            "model": backend_model,
+            "gpu": backend_gpu,
+            "language": language,
+            "initial_prompt": initial_prompt,
+            "close_mic_profile": "atc-close-mic:abusive",
+            "close_mic_seed": close_mic_profile.seed,
+            "results": [result_to_dict(original), result_to_dict(abusive)],
+            "wer_delta": abusive.wer.wer - original.wer.wer,
+        }
+        report_path = output_dir / "summary.json"
+        report_path.write_text(
+            jsonlib.dumps(report, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
 
     if json_output:
         typer.echo(jsonlib.dumps(report, ensure_ascii=False))
@@ -210,7 +422,7 @@ def main(
 
 def transcribe_and_score(
     *,
-    mlx_whisper: Any,
+    whisper_backend: WhisperBackend,
     console: Console,
     label: str,
     audio_path: Path,
@@ -220,26 +432,39 @@ def transcribe_and_score(
     initial_prompt: str | None,
     verbose: bool,
 ) -> TranscriptionResult:
-    console.print(f"transcribing [bold]{label}[/bold]...")
+    console.print(f"transcribing [bold]{label}[/bold] via {whisper_backend.name}...")
     started = time.perf_counter()
-    result = mlx_whisper.transcribe(
-        str(audio_path),
-        path_or_hf_repo=model,
+    text = whisper_backend.transcribe(
+        audio_path,
+        model=model,
         language=language,
         initial_prompt=initial_prompt,
         verbose=verbose,
     )
     elapsed = time.perf_counter() - started
-    text = str(result["text"]).strip()
     wer = word_error_rate(reference_text, text)
     console.print(f"{label}: WER [bold]{wer.wer:.2%}[/bold] in {elapsed:.1f}s")
     return TranscriptionResult(
         label=label,
         audio_path=str(audio_path),
+        backend=whisper_backend.name,
         text=text,
         seconds=elapsed,
         wer=wer,
     )
+
+
+def build_whisper_backend(
+    backend: Backend,
+    *,
+    modal_gpu: str = DEFAULT_MODAL_GPU,
+    show_output: bool,
+) -> WhisperBackend:
+    match backend:
+        case Backend.LOCAL:
+            return LocalWhisperBackend()
+        case Backend.MODAL:
+            return ModalWhisperBackend(gpu=modal_gpu, show_output=show_output)
 
 
 def word_error_rate(reference: str, hypothesis: str) -> WerResult:
@@ -310,7 +535,9 @@ def print_config(
     *,
     audio_path: Path,
     reference_path: Path,
+    backend: str,
     model: str,
+    gpu: str | None,
     language: str,
     initial_prompt: str | None,
 ) -> None:
@@ -319,7 +546,10 @@ def print_config(
     table.add_column("Value", style="cyan")
     table.add_row("audio", str(audio_path))
     table.add_row("reference", str(reference_path))
+    table.add_row("backend", backend)
     table.add_row("model", model)
+    if gpu is not None:
+        table.add_row("gpu", gpu)
     table.add_row("language", language)
     table.add_row("prompt", initial_prompt or "<none>")
     console.print(table)
